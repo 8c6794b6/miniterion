@@ -1,0 +1,140 @@
+cabal-version:      3.0
+name:               miniterion
+
+-- The package version.
+-- See the Haskell package versioning policy (PVP) for standards
+-- guiding when and how versions should be incremented.
+-- https://pvp.haskell.org
+-- PVP summary:     +-+------- breaking API changes
+--                  | | +----- non-breaking API additions
+--                  | | | +--- code changes with no API change
+version:            0.1.0.0
+
+synopsis:           Simple and lightweight benchmark utilities
+
+description:        Simple benchmark utilities with API subset from
+                    @criterion@, depends on two packages: @base@ and @deepseq@.
+
+license:            MIT
+license-file:       LICENSE
+author:             8c6794b6
+maintainer:         8c6794b6@gmail.com
+
+-- A copyright notice.
+-- copyright:
+category:           Benchmarking
+build-type:         Simple
+
+extra-doc-files:    CHANGELOG.md
+                    README.md
+
+-- Extra source files to be distributed with the package, such as examples, or a tutorial module.
+-- extra-source-files:
+
+flag dev
+    default:          False
+    manual:           True
+    description:      Turn on development options.
+
+common basic
+    build-depends:    base >= 4.12 && < 5.0
+    default-language: Haskell2010
+    ghc-options:      -Wall
+
+library
+    import:           basic
+    exposed-modules:  Miniterion
+    build-depends:    deepseq >= 1.4 && < 1.5
+    hs-source-dirs:   src
+
+test-suite miniterion-test
+    import:           basic
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    build-depends:    directory
+                    , miniterion
+                    , tasty
+                    , tasty-hunit
+
+benchmark fibo-mi
+    default-language: Haskell2010
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   bench
+    main-is:          Main.hs
+    build-depends:    base
+                    , miniterion
+
+benchmark fibo-cr
+    import:           basic
+    if !flag(dev)
+       buildable: False
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   bench
+    main-is:          Main.hs
+    build-depends:    criterion
+    mixins:           criterion (Criterion.Main as Miniterion)
+
+benchmark fibo-ga
+    import:           basic
+    if !flag(dev)
+       buildable: False
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   bench
+    main-is:          Main.hs
+    build-depends:    gauge
+    mixins:           gauge (Gauge.Main as Miniterion)
+
+benchmark fibo-ta
+    import:           basic
+    if !flag(dev)
+       buildable: False
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   bench
+    main-is:          Main.hs
+    build-depends:    tasty-bench
+    mixins:           tasty-bench (Test.Tasty.Bench as Miniterion)
+
+
+-- Executables for development
+-- ---------------------------
+--
+-- Following executables are written to see the behaviour of miniterion
+-- compared to other benchmark packages. To compile (and/or run) with
+-- cabal-install, add "+dev" flag option, e.g.; to run the `mb'
+-- executable:
+--
+-- > cabal run -f +dev -- mb 
+--
+-- These executables are set to "buildable: False" unless the "dev"
+-- flag is turned on.
+
+common app
+    import: basic
+    if !flag(dev)
+      buildable: False
+    hs-source-dirs:   app
+    ghc-options:      -O2 -rtsopts
+
+executable mi
+    import:           app
+    main-is:          Main.hs
+    build-depends:    miniterion
+
+executable cr
+    import:           app
+    main-is:          Main.hs
+    build-depends:    criterion
+    mixins:           criterion (Criterion.Main as Miniterion)
+
+executable ga
+    import:           app
+    main-is:          Main.hs
+    build-depends:    gauge
+    mixins:           gauge (Gauge.Main as Miniterion)
+
+executable ta
+    import:           app
+    main-is:          Main.hs
+    build-depends:    tasty-bench
+    mixins:           tasty-bench (Test.Tasty.Bench as Miniterion)
