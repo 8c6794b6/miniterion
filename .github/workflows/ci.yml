@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    paths-ignore:
+      - '**.md'
+
+env:
+  cache-version: v1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  stack:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    runs-on:
+      - ${{ matrix.os }}
+
+    steps:
+      - name: Checkout project repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Show stack version
+        run: stack --version
+
+      - name: Cache stack
+        uses: freckle/stack-cache-action@v2
+
+      - name: Set stack to use system ghc
+        run: stack config set system-ghc --global true
+
+      - name: Install dependency packages
+        run: stack build --test --coverage --bench --only-dependencies
+
+      - name: Build
+        run: stack build --test --coverage --bench --no-run-tests --no-run-benchmarks
+
+      - name: Run tests and benchmarks
+        run: stack build --test --coverage --bench
+
+      - name: Generate coverage report
+        uses: 8c6794b6/hpc-codecov-action@v2
+        with:
+          target: stack:miniterion-test
+
+      - name: Send coverage report
+        uses: codecov/codecov-action@v3
+
+  cabal-install:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          # - macos-latest
+          # - windows-latest
+
+    runs-on:
+      - ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Show versions
+        run: |
+          ghc --version
+          cabal --version
+
+      - name: Update hackage data
+        run: cabal update
+
+      - name: Configure
+        run: cabal configure --enable-tests --enable-coverage
+
+      - name: Build
+        run: cabal build
+
+      - name: Run tests
+        run: cabal test
