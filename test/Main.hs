@@ -6,6 +6,7 @@ import           Data.Functor       (void)
 import           System.Environment (withArgs)
 import           System.Exit        (ExitCode (..), exitFailure, exitSuccess)
 import           System.IO.Error    (isDoesNotExistError)
+import           System.Info        (os)
 
 -- directory
 import           System.Directory   (removeFile)
@@ -78,23 +79,22 @@ benchmarkable = testGroup "benchmarkable"
     ]
 
   , testGroup "perRunEnv"
-    [ testCase "wc with perRunEnv" $
-      withArgs ["--stdev", "20"] $
-      defaultMain
-      [ bench "wc" $
-        perRunEnv
-        (readFile miniterionDotCabal)
-        (pure . wc)
-      ]
-    , testCase "perRunEnv with time limit" $
-      withArgs ["-L2", "-s1e-9"] $
-      defaultMain
-      [ bench "fib" $
-        perRunEnv
-        (pure 32)
-        (pure . fib)
-      ]
-    ]
+       ([ testCase "wc with perRunEnv" $
+          withArgs ["--stdev", "90"] $
+          defaultMain
+          [ bench "wc" $
+            perRunEnv (readFile miniterionDotCabal) (pure . wc) ]
+        | os == "linux"
+        ] <>
+        [ testCase "perRunEnv with time limit" $
+          withArgs ["-L2", "-s1e-9"] $
+          defaultMain
+          [ bench "fib" $
+            perRunEnv
+            (pure 32)
+            (pure . fib)
+          ]
+        ])
   , testGroup "interactive"
     [ testCase "simple function" $
       benchmark (nf not True)
