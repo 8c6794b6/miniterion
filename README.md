@@ -1,6 +1,7 @@
 # Miniterion
 
 [![ci][ci-badge-svg]][ci-badge-link]
+[![codecov][codecov-badge-svg]][codecov-badge-link]
 [![Hackage][hackage-badge]][hackage-package]
 [![Stackage LTS][stackage-lts-badge]][stackage-lts-package]
 
@@ -109,8 +110,13 @@ to see the help message.
 
 [ci-badge-svg]: https://github.com/8c6794b6/miniterion/actions/workflows/ci.yml/badge.svg
 [ci-badge-link]: https://github.com/8c6794b6/miniterion/actions/workflows/ci.yml
+
+[codecov-badge-svg]: https://codecov.io/github/8c6794b6/miniterion/graph/badge.svg
+[codecov-badge-link]: https://codecov.io/github/8c6794b6/miniterion
+
 [hackage-badge]: http://img.shields.io/hackage/v/miniterion.svg
 [hackage-package]: http://hackage.haskell.org/package/miniterion
+
 [stackage-lts-badge]: http://stackage.org/package/miniterion/badge/lts
 [stackage-lts-package]: http://stackage.org/lts/package/miniterion
 
