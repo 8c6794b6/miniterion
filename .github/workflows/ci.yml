@@ -25,6 +25,9 @@ jobs:
     runs-on:
       - ${{ matrix.os }}
 
+    env:
+      STACK_BUILD: stack build --test --coverage --bench
+
     steps:
       - name: Checkout project repository
         uses: actions/checkout@v4
@@ -32,7 +35,9 @@ jobs:
           fetch-depth: 1
 
       - name: Show stack version
-        run: stack --version
+        run: |
+          stack --version
+          stack exec -- ghc --version
 
       - name: Cache stack
         uses: freckle/stack-cache-action@v2
@@ -41,13 +46,13 @@ jobs:
         run: stack config set system-ghc --global true
 
       - name: Install dependency packages
-        run: stack build --test --coverage --bench --only-dependencies
+        run: $STACK_BUILD --only-dependencies miniterion
 
       - name: Build
-        run: stack build --test --coverage --bench --no-run-tests --no-run-benchmarks
+        run: $STACK_BUILD --no-run-tests --no-run-benchmarks miniterion
 
       - name: Run tests and benchmarks
-        run: stack build --test --coverage --bench
+        run: $STACK_BUILD miniterion
 
       - name: Generate coverage report
         uses: 8c6794b6/hpc-codecov-action@v2
@@ -83,7 +88,7 @@ jobs:
         run: cabal update
 
       - name: Configure
-        run: cabal configure --enable-tests --enable-coverage
+        run: cabal configure
 
       - name: Build
         run: cabal build

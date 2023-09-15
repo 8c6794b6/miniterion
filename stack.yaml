@@ -1,3 +1,4 @@
 resolver: lts-21.12
 packages:
   - .
+  - miniterion-compare

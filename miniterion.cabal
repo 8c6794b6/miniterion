@@ -19,25 +19,14 @@ license:            MIT
 license-file:       LICENSE
 author:             8c6794b6
 maintainer:         8c6794b6@gmail.com
-
--- A copyright notice.
--- copyright:
 category:           Benchmarking
 build-type:         Simple
 
 extra-doc-files:    CHANGELOG.md
                     README.md
 
--- Extra source files to be distributed with the package, such as examples, or a tutorial module.
--- extra-source-files:
-
 tested-with:          GHC == 9.4.7
                     , GHC == 9.6.2
-
-flag dev
-    default:          False
-    manual:           True
-    description:      Turn on development options.
 
 common basic
     build-depends:    base >= 4.12 && < 5.0
@@ -60,7 +49,7 @@ test-suite miniterion-test
                     , tasty >= 1.4 && < 1.6
                     , tasty-hunit >= 0.10 && < 0.11
 
-benchmark fibo-mi
+benchmark fibo
     default-language: Haskell2010
     type:             exitcode-stdio-1.0
     hs-source-dirs:   bench
@@ -68,79 +57,6 @@ benchmark fibo-mi
     build-depends:    base
                     , miniterion
 
-benchmark fibo-cr
-    import:           basic
-    if !flag(dev)
-       buildable: False
-    type:             exitcode-stdio-1.0
-    hs-source-dirs:   bench
-    main-is:          Main.hs
-    build-depends:    criterion
-    mixins:           criterion (Criterion.Main as Miniterion)
-
-benchmark fibo-ga
-    import:           basic
-    if !flag(dev)
-       buildable: False
-    type:             exitcode-stdio-1.0
-    hs-source-dirs:   bench
-    main-is:          Main.hs
-    build-depends:    gauge
-    mixins:           gauge (Gauge.Main as Miniterion)
-
-benchmark fibo-ta
-    import:           basic
-    if !flag(dev)
-       buildable: False
-    type:             exitcode-stdio-1.0
-    hs-source-dirs:   bench
-    main-is:          Main.hs
-    build-depends:    tasty-bench
-    mixins:           tasty-bench (Test.Tasty.Bench as Miniterion)
-
 source-repository head
   type:     git
   location: https://github.com/8c6794b6/miniterion.git
-
--- Executables for development
--- ---------------------------
---
--- Following executables are written to see the behaviour of miniterion
--- compared to other benchmark packages. To compile (and/or run) with
--- cabal-install, add "+dev" flag option, e.g.; to run the `mb'
--- executable:
---
--- > cabal run -f +dev -- mb 
---
--- These executables are set to "buildable: False" unless the "dev"
--- flag is turned on.
-
-common app
-    import: basic
-    if !flag(dev)
-      buildable: False
-    hs-source-dirs:   app
-    ghc-options:      -rtsopts
-
-executable mi
-    import:           app
-    main-is:          Main.hs
-    build-depends:    miniterion
-
-executable cr
-    import:           app
-    main-is:          Main.hs
-    build-depends:    criterion
-    mixins:           criterion (Criterion.Main as Miniterion)
-
-executable ga
-    import:           app
-    main-is:          Main.hs
-    build-depends:    gauge
-    mixins:           gauge (Gauge.Main as Miniterion)
-
-executable ta
-    import:           app
-    main-is:          Main.hs
-    build-depends:    tasty-bench
-    mixins:           tasty-bench (Test.Tasty.Bench as Miniterion)

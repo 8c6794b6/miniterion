@@ -1,5 +1,10 @@
 packages:
-        .
+        ./
+        ./miniterion-compare
 
 package miniterion
+        tests: True
+        coverage: True
+
+package miniterion-compare
 

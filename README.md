@@ -42,7 +42,7 @@ function.
 In cabal configuration:
 
 ```
-benchmark fibo-mi
+benchmark fibo
     default-language: Haskell2010
     type:             exitcode-stdio-1.0
     hs-source-dirs:   bench
@@ -82,11 +82,11 @@ then compile and run the benchmark with `cabal bench`:
 $ cabal bench
 Build profile: -w ghc-9.6.2 -O1
 In order, the following will be built (use -v for more details):
- - miniterion-0.1.0.0 (bench:fibo-mi) (first run)
-Preprocessing benchmark 'fibo-mi' for miniterion-0.1.0.0..
-Building benchmark 'fibo-mi' for miniterion-0.1.0.0..
+ - miniterion-0.1.0.0 (bench:fibo) (first run)
+Preprocessing benchmark 'fibo' for miniterion-0.1.0.0..
+Building benchmark 'fibo' for miniterion-0.1.0.0..
 Running 1 benchmarks...
-Benchmark fibo-mi: RUNNING...
+Benchmark fibo: RUNNING...
 benchmarking fib/1
 mean                 13.58 ns
 std dev              686.0 ps
@@ -103,13 +103,13 @@ benchmarking fib/11
 mean                 4.175 μs
 std dev              92.17 ns
 
-Benchmark fibo-mi: FINISH
+Benchmark fibo: FINISH
 ```
 
 Run:
 
 ```
-$ cabal run -- fibo-mi --help
+$ cabal run -- fibo --help
 ```
 
 to see the help message.
