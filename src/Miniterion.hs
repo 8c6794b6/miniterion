@@ -1210,8 +1210,8 @@ word64ToDouble = fromIntegral
 -- ------------------------------------------------------------------------
 
 -- criterion-measurement-0.2.1 uses NOINLINE pragma, gauge-0.2.5 and
--- tasty-0.3.4 use INLINE pragma for following wrapper functions.  At
--- the moment, this module is using NOINLINE.
+-- tasty-bench-0.3.4 use INLINE pragma for following wrapper
+-- functions.  At the moment, this module is using NOINLINE.
 
 #if !MIN_VERSION_base(4,15,0)
 data SPEC = SPEC
@@ -1224,8 +1224,8 @@ funcToBench frc = benchLoop SPEC
     -- Explicitly passing `f' and `x' as the arguments of `benchLoop',
     -- so that ghc won't optimize away them. This approach is taken in
     -- tasty-bench. Criterion, as of criterion-measurement 0.2.1,
-    -- defines the looping function in separate module and the module
-    -- has hard coded -fno-full-laziness GHC_OPTIONS pragma.
+    -- defines the looping function in a separate module and that
+    -- module has -fno-full-laziness GHC_OPTIONS pragma hard coded.
     benchLoop !_ f x n
       | n == 0 = pure ()
       | otherwise = do
