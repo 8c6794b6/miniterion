@@ -34,13 +34,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Cache stack
+        uses: freckle/stack-cache-action@v2
+
       - name: Show stack version
         run: |
           stack --version
           stack exec -- ghc --version
-
-      - name: Cache stack
-        uses: freckle/stack-cache-action@v2
 
       - name: Set stack to use system ghc
         run: stack config set system-ghc --global true
