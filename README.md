@@ -1,5 +1,6 @@
 # Miniterion
 
+[![ci][ci-badge-svg]][ci-badge-link]
 [![Hackage][hackage-badge]][hackage-package]
 [![Stackage LTS][stackage-lts-badge]][stackage-lts-package]
 
@@ -106,6 +107,8 @@ to see the help message.
 
 <!-- links -->
 
+[ci-badge-svg]: https://github.com/8c6794b6/miniterion/actions/workflows/ci.yml/badge.svg
+[ci-badge-link]: https://github.com/8c6794b6/miniterion/actions/workflows/ci.yml
 [hackage-badge]: http://img.shields.io/hackage/v/miniterion.svg
 [hackage-package]: http://hackage.haskell.org/package/miniterion
 [stackage-lts-badge]: http://stackage.org/package/miniterion/badge/lts
