@@ -13,18 +13,26 @@ for writing benchmark codes. The package has an API subset of
 packages ([`criterion`](criterion), [`gauge`](gauge), and
 [`tasty-bench`](tasty-bench)) should be easily done.
 
-The miniterion package is designed to have a small number of package
-dependencies. At the time of writing, the dependency packages are only
-two: `base` and `deepseq`. The package does not have rich features,
-but compared to other benchmarking packages, the package and benchmark
-executable should compile faster, and the resulting benchmark
-executable should be smaller.
-
 As in `criterion`, the executable built with the `defaultMain`
 function supports selecting the running benchmarks with prefix match,
 case insensitive prefix match, substring match, or glob pattern match
 via the command line option. Invoke the benchmark executable with `--help`
 option to see other available options.
+
+
+## Philosophy
+
+The goal of the miniterion package is to have a reasonably useful and
+lightweight benchmarking utility with a small amount of maintenance
+costs.
+
+The miniterion package is designed to have a small number of package
+dependencies. At the time of writing, the dependency packages are only
+two: `base` and `deepseq`. The miniterion package does not have rich
+features, but compared to other benchmarking packages, the package and
+benchmark executable should compile faster, and the resulting
+benchmark executable should be smaller.
+
 
 ## Example
 
