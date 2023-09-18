@@ -27,6 +27,8 @@ license:            MIT
 license-file:       LICENSE
 author:             8c6794b6
 maintainer:         8c6794b6@gmail.com
+homepage:           https://github.com/8c6794b6/miniterion
+bug-reports:        https://github.com/8c6794b6/miniterion/issues
 category:           Benchmarking
 build-type:         Simple
 
