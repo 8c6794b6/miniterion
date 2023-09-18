@@ -45,10 +45,10 @@ module Miniterion
   -- * Running a benchmark
   , nf
   , whnf
-  , nfAppIO
-  , whnfAppIO
   , nfIO
   , whnfIO
+  , nfAppIO
+  , whnfAppIO
 
     -- * Turning a suite of benchmarks into a program
   , defaultMain
