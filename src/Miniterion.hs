@@ -8,11 +8,10 @@
 Module:       Miniterion
 License:      MIT
 
-Simple benchmark utilities with API subset of
-[@criterion@](https://hackage.haskell.org/package/criterion) (which
-means also a subset of
-[@gauge@](https://hackage.haskell.org/package/gauge) and
-[@tasty-bench@](https://hackage.haskell.org/package/tasty-bench)).
+Simple benchmarking utilities with API subset of
+<https://hackage.haskell.org/package/criterion criterion> (and also a
+subset of <https://hackage.haskell.org/package/gauge gauge> and
+<https://hackage.haskell.org/package/tasty-bench tasty-bench>).
 
 The goal of this package is to provide simple and lightweight
 benchmark utilities with less amount of codes and dependency
@@ -111,7 +110,7 @@ import           Control.DeepSeq       (NFData, force, rnf)
 -- | Benchmarks are simple tree structure with names, and additional
 -- information to support 'envWithCleanup'.
 --
--- Drop-in replacement for @Criterion.@'Criterion.Benchmark'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#t:Benchmark Benchmark>@.
 data Benchmark
   = Bench String Benchmarkable
   | Bgroup String [Benchmark]
@@ -120,7 +119,7 @@ data Benchmark
 -- | Something that can be benchmarked, produced by 'nf', 'whnf',
 -- 'nfIO', 'whnfIO', 'nfAppIO', and 'whnfAppIO'.
 --
--- Drop-in replacement for @Criterion.@'Criterion.Benchmarkable'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#t:Benchmarkable Benchmarkable>@.
 data Benchmarkable = forall a. NFData a =>
   Benchmarkable { allocEnv      :: Word64 -> IO a
                 , cleanEnv      :: Word64 -> a -> IO ()
@@ -131,13 +130,13 @@ data Benchmarkable = forall a. NFData a =>
 -- the 'Word64' parameter indicates the number of times to run the
 -- action.
 --
--- Drop-in replacement for @Criterion.@'Criterion.toBenchmarkable'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:toBenchmarkable toBenchmarkable>@.
 toBenchmarkable :: (Word64 -> IO ()) -> Benchmarkable
 toBenchmarkable f = Benchmarkable noop (const noop) (const f) False
 {-# INLINE toBenchmarkable #-}
 
 -- | Run benchmarks and report results, providing an interface
--- compatible with @Criterion.@'Criterion.defaultMain'.
+-- compatible with @Criterion.Main.<https://hackage.haskell.org/package/criterion/docs/Criterion-Main.html#v:defaultMain defaultMain>@.
 defaultMain :: [Benchmark] -> IO ()
 defaultMain bs = do
   let act = defaultMainWith defaultConfig bs
@@ -155,7 +154,7 @@ defaultMain bs = do
 -- | Attach a name to 'Benchmarkable'.
 --
 -- The type signature is compatible with
--- @Criterion.@'Criterion.bench'.
+-- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:bench bench>@.
 bench
   :: String -- ^ Name of this benchmark.
   -> Benchmarkable -- ^ Benchmark target.
@@ -165,7 +164,7 @@ bench = Bench
 -- | Attach a name to a group of 'Benchmark'.
 --
 -- The type signature is compatible with
--- @Criterion.@'Criterion.bgroup'.
+-- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:bgroup bgroup>@.
 bgroup
   :: String -- ^ Name of this benchmark group.
   -> [Benchmark] -- ^ List of benchmarks in the group.
@@ -175,7 +174,7 @@ bgroup = Bgroup
 -- | Run a benchmark (or collection of benchmarks) in the given
 -- environment, usually reading large input data from file.
 --
--- Drop-in replacement for @Criterion.@'Criterion.env'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:env env>@.
 env
   :: NFData env
   => IO env -- ^ Action to create the environment.
@@ -186,7 +185,7 @@ env alloc = envWithCleanup alloc noop
 -- | Similar to 'env', but includes an additional argument to clean up
 -- the environment.
 --
--- Drop-in replacement for @Criterion.@'Criterion.envWithCleanup'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:envWithCleanup envWithCleanup>@.
 envWithCleanup
   :: NFData env
   => IO env -- ^ Action to create the environment.
@@ -198,7 +197,7 @@ envWithCleanup alloc clean = Environment alloc (void . clean)
 -- | Create a Benchmarkable where a fresh environment is allocated for every
 -- batch of runs of the benchmarkable.
 --
--- Drop-in replacement for @Criterion.@'Criterion.perBatchEnv'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perBatchEnv perBatchEnv>@.
 perBatchEnv
   :: (NFData env, NFData b)
   => (Word64 -> IO env)
@@ -211,7 +210,7 @@ perBatchEnv alloc = perBatchEnvWithCleanup alloc (const noop)
 -- | Same as `perBatchEnv`, but but allows for an additional callback
 -- to clean up the environment.
 --
--- Drop-in replacement for @Criterion.@'Criterion.perBatchEnvWithCleanup'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perBatchEnvWithCleanup perBatchEnvWithCleanup>@.
 perBatchEnvWithCleanup
   :: (NFData env, NFData b)
   => (Word64 -> IO env)
@@ -228,7 +227,7 @@ perBatchEnvWithCleanup alloc clean run = Benchmarkable alloc clean run' False
 -- | Create a Benchmarkable where a fresh environment is allocated for
 -- every run of the operation to benchmark.
 --
--- Drop-in replacement for @Criterion.@'Criterion.perRunEnv'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perRunEnv perRunEnv>@.
 --
 -- __NOTE__: This function does not work well (or not work at all) if
 -- the time spent in the initialization work is relatively long
@@ -245,7 +244,7 @@ perRunEnv alloc = perRunEnvWithCleanup alloc noop
 -- | Same as `perBatchEnv`, but allows for an additional callback to
 -- clean up the environment.
 --
--- Drop-in replacement for @Criterion.@'Criterion.perRunEnvWithCleanup'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perRunEnvWithCleanup perRunEnvWithCleanup>@.
 --
 -- __NOTE__: See the note in 'perRunEnv'.
 perRunEnvWithCleanup
@@ -263,7 +262,7 @@ perRunEnvWithCleanup alloc clean run = bm {perRun = True}
 -- @x@.  This does not include time to evaluate @f@ or @x@ themselves.
 -- Ideally @x@ should be a primitive data type like 'Data.Int.Int'.
 --
--- Drop-in replacement for @Criterion.@'Criterion.nf'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nf nf>@.
 nf :: NFData b => (a -> b) -> a -> Benchmarkable
 nf = fmap toBenchmarkable . funcToBench rnf
 {-# INLINE nf #-}
@@ -273,7 +272,7 @@ nf = fmap toBenchmarkable . funcToBench rnf
 -- evaluate @f@ or @x@ themselves.  Ideally @x@ should be a primitive
 -- data type like 'Data.Int.Int'.
 --
--- Drop-in replacement for @Criterion.@'Criterion.whnf'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnf whnf>@.
 whnf :: (a -> b) -> a -> Benchmarkable
 whnf = fmap toBenchmarkable . funcToBench id
 {-# INLINE whnf #-}
@@ -282,7 +281,7 @@ whnf = fmap toBenchmarkable . funcToBench id
 -- compute its normal form (by means of 'force', not
 -- 'Control.DeepSeq.rnf').
 --
--- Drop-in replacement for @Criterion.@'Criterion.nfIO'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nfIO nfIO>@.
 nfIO :: NFData a => IO a -> Benchmarkable
 nfIO = toBenchmarkable . ioToBench rnf
 {-# INLINE nfIO #-}
@@ -290,7 +289,7 @@ nfIO = toBenchmarkable . ioToBench rnf
 -- | 'whnfIO' @x@ measures time to evaluate side-effects of @x@ and
 -- compute its weak head normal form.
 --
--- Drop-in replacement for @Criterion.@'Criterion.whnfIO'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnfIO whnfIO>@.
 whnfIO :: IO a -> Benchmarkable
 whnfIO = toBenchmarkable . ioToBench id
 {-# INLINE whnfIO #-}
@@ -301,7 +300,7 @@ whnfIO = toBenchmarkable . ioToBench id
 -- evaluate @f@ or @x@ themselves.  Ideally @x@ should be a primitive
 -- data type like 'Data.Int.Int'.
 --
--- Drop-in replacement for @Criterion.@'Criterion.nfAppIO'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nfAppIO nfAppIO>@.
 nfAppIO :: NFData b => (a -> IO b) -> a -> Benchmarkable
 nfAppIO = fmap toBenchmarkable . ioFuncToBench rnf
 {-# INLINE nfAppIO #-}
@@ -311,12 +310,13 @@ nfAppIO = fmap toBenchmarkable . ioFuncToBench rnf
 -- This does not include time to evaluate @f@ or @x@ themselves.
 -- Ideally @x@ should be a primitive data type like 'Data.Int.Int'.
 --
--- Drop-in replacement for @Criterion.@'Criterion.whnfAppIO'.
+-- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnfAppIO whnfAppIO>@.
 whnfAppIO :: (a -> IO b) -> a -> Benchmarkable
 whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
 {-# INLINE whnfAppIO #-}
 
--- | Run a benchmark interactively.
+-- | Run a benchmark interactively, providing an interface compatible with
+-- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:benchmark benchmark>@.
 benchmark :: Benchmarkable -> IO ()
 benchmark = void . runBenchmark defaultConfig . bench "..."
 
