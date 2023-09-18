@@ -387,7 +387,10 @@ fib n = if n < 2 then toInteger n else fib (n-1) + fib (n-2)
 
 fastfib :: Int -> Integer
 fastfib n = fibs !! n where
-  fibs = 0 : 1 : zipWith (+) (tail fibs) fibs
+  fibs = 0 : 1 : rest
+  rest = case fibs of
+           _:tl -> zipWith (+) tl fibs
+           []   -> error "impossible happened!"
 
 wc :: String -> Int
 wc = length . words
