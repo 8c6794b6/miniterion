@@ -12,8 +12,16 @@ version:            0.1.0.0
 
 synopsis:           Simple and lightweight benchmark utilities
 
-description:        Simple benchmark utilities with API subset from
-                    @criterion@, depends on two packages: @base@ and @deepseq@.
+description:
+  Simple benchmarking utilities with API subset of
+  <https://hackage.haskell.org/package/criterion criterion> (and also a
+  subset of <https://hackage.haskell.org/package/gauge gauge> and
+  <https://hackage.haskell.org/package/tasty-bench tasty-bench>).
+
+  The goal of this package is to provide simple and lightweight
+  benchmark utilities with less amount of codes and dependency
+  packages. For robust and feature rich benchmarking utility, use the
+  other packages mentioned above.
 
 license:            MIT
 license-file:       LICENSE
