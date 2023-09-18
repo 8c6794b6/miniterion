@@ -12,8 +12,7 @@ import           System.Info        (os)
 import           System.Directory   (removeFile)
 
 -- tasty
-import           Test.Tasty         hiding (defaultMain)
-import qualified Test.Tasty         as Tasty
+import           Test.Tasty
 
 -- tasty-hunit
 import           Test.Tasty.HUnit
@@ -27,7 +26,7 @@ import           Miniterion
 -- ------------------------------------------------------------------------
 
 main :: IO ()
-main = Tasty.defaultMain $
+main = Test.Tasty.defaultMain $
   testGroup "All"
   [ benchmarkable
   , options
@@ -46,7 +45,7 @@ main = Tasty.defaultMain $
 benchmarkable :: TestTree
 benchmarkable = testGroup "benchmarkable"
   [ testCase "fib" $
-    defaultMain
+    defaultMain'
     [ bgroup "fib-nf"
       [ bench "4" (nf fib 4)
       , bench "8" (nf fib 8) ]
@@ -55,7 +54,7 @@ benchmarkable = testGroup "benchmarkable"
       , bench "8" (whnf fib 8) ]]
 
   , testCase "wcIO" $
-    defaultMain
+    defaultMain'
     [ bgroup "wcIO"
       [ bench "nfIO" (nfIO (wcIO miniterionDotCabal))
       , bench "whnfIO" (whnfIO (wcIO miniterionDotCabal))
@@ -64,141 +63,137 @@ benchmarkable = testGroup "benchmarkable"
 
   , testGroup "env"
     [ testCase "wc with env" $
-      defaultMain
+      defaultMain'
       [ env (readFile miniterionDotCabal) $ \contents ->
           bench "wc" (nf wc contents) ]]
 
   , testGroup "perBatchEnv"
     [ testCase "wc with perBatchEnv" $
-      defaultMain
+      defaultMain'
       [ bench "wc" $
         perBatchEnv
         (\_ -> readFile miniterionDotCabal)
-        (pure . wc)
-      ]
-    ]
+        (pure . wc) ]]
 
   , testGroup "perRunEnv"
        ([ testCase "wc with perRunEnv" $
-          withArgs ["--stdev", "90"] $
-          defaultMain
+          defaultMainWith
+          ["--stdev", "90"]
           [ bench "wc" $
             perRunEnv (readFile miniterionDotCabal) (pure . wc) ]
         | os == "linux"
         ] <>
         [ testCase "perRunEnv with time limit" $
-          withArgs ["-L2", "-s1e-9"] $
-          defaultMain
+          defaultMainWith
+          ["-L2", "-s1e-9"]
           [ bench "fib" $
             perRunEnv
             (pure 32)
-            (pure . fib)
-          ]
-        ])
+            (pure . fib) ]])
+
   , testGroup "interactive"
     [ testCase "simple function" $
-      benchmark (nf not True)
-    ]
+      benchmark (nf not True) ]
   ]
 
 options :: TestTree
 options = testGroup "options"
   [ testCase "help with long option" $
-    withArgs ["--help"] emptyMain
+    emptyMain ["--help"]
 
   , testCase "help with short option" $
-    withArgs ["-h"] emptyMain
+    emptyMain ["-h"]
 
   , testCase "show version info" $
-    withArgs ["--version"] emptyMain
+    emptyMain ["--version"]
 
   , testCase "listing names with long option" $
-    withArgs ["--list"] benchFib4
+    benchFib4 ["--list"]
 
   , testCase "listing names with short option" $
-    withArgs ["-l"] benchFib4
+    benchFib4 ["-l"]
 
   , testCase "listing name of benchmark using env" $
-    withArgs ["--list"] benchWithEnv
+    benchFib4 ["--list"]
 
   , testCase "listing name of benchmark using env and pat" $
-    shouldExitFailure $ withArgs ["--list"] benchWithEnvAndPat
+    shouldExitFailure $ benchWithEnvAndPat ["--list"]
 
   , testCase "listing name of benchmark using env and irrefultable pat" $
-    withArgs ["--list"] benchWithEnvAndIrrPat
+    benchWithEnvAndIrrPat ["--list"]
 
   , testCase "stdev option" $
-    withArgs ["--stdev", "20"] benchFib4
+    benchFib4 ["--stdev", "20"]
 
   , testCase "short stdev option" $
-    withArgs ["-s", "20"] benchFib4
+    benchFib4 ["-s", "20"]
 
   , testCase "infinit stdev" $
-    withArgs ["--stdev", "Infinity"] benchFib4
+    benchFib4 ["--stdev", "Infinity"]
 
   , testCase "invalid stdev arg" $
-    shouldExitFailure $ withArgs ["--stdev", "foo"] emptyMain
+    shouldExitFailure $ emptyMain ["--stdev", "foo"]
 
   , testCase "missing stdev arg" $
-    shouldExitFailure $ withArgs ["--stdev"] emptyMain
+    shouldExitFailure $ emptyMain ["--stdev"]
 
   , testCase "cpu clock for time-mode option" $
-    withArgs ["--time-mode", "cpu"] benchFib4
+    benchFib4 ["--time-mode", "cpu"]
 
   , testCase "wall clock for time-mode option" $
-    withArgs ["--time-mode", "wall"] benchFib4
+    benchFib4 ["--time-mode", "wall"]
 
   , testCase "invalid time-mode option" $
-    shouldExitFailure $ withArgs ["--time-mode", "blah"] benchFib4
+    shouldExitFailure $ benchFib4 ["--time-mode", "blah"]
 
   , testCase "invalid timeout option" $
-    shouldExitFailure $ withArgs ["--time-limit", "foo"] benchFib4
+    shouldExitFailure $ benchFib4 ["--time-limit", "foo"]
 
   , testCase "verbosity 0" $
-    withArgs ["--verbosity", "0"] benchFib4
+    benchFib4 ["--verbosity", "0"]
 
   , testCase "verbosity 1" $
-    withArgs ["-v", "1"] benchFib4
+    benchFib4 ["-v", "1"]
 
   , testCase "verbosity 2" $
-    withArgs ["-v2"] benchFib4
+    benchFib4 ["-v2"]
 
   , testCase "invalid verbosity" $
-    shouldExitFailure $ withArgs ["--verbosity", "foo"] benchFib4
+    shouldExitFailure $ benchFib4 ["--verbosity", "foo"]
 
   , testCase "out of range verbosity" $
-    shouldExitFailure $ withArgs ["--verbosity", "100"] benchFib4
+    shouldExitFailure $ benchFib4 ["--verbosity", "100"]
 
   , testCase "non existing option" $
-    shouldExitFailure $ withArgs ["--no-such-option"] emptyMain
+    shouldExitFailure $ emptyMain ["--no-such-option"]
   ]
 
 skipping :: TestTree
 skipping = testGroup "skipping"
   [ testCase "selecting benchmarks" $
-    withArgs ["2"] benchNesting
+    benchNesting ["2"]
 
   , testCase "selecting benchmarks, skipping group" $
-    withArgs ["c.1.A"] benchNesting
+    benchNesting ["c.1.A"]
 
   , testCase "no matching benchmark" $
-    withArgs ["no-matching-benchmark"] benchNesting
+    benchNesting ["no-matching-benchmark"]
 
   , testCase "selecting under env, strict" $
     shouldExitFailure $
-    withArgs ["fiba"] benchNestingEnvStrict
+    benchNestingEnvStrict ["fiba"]
 
   , testCase "selecting under env, strict, under group" $
     shouldExitFailure $
-    withArgs ["fiba"] benchNestingEnvStrict_grouped
+    benchNestingEnvStrictGrouped ["fiba"]
 
   , testCase "selecting under env" $
-    withArgs ["a"] benchForMatch
+    benchForMatch ["a"]
   ]
 
-benchNestingEnvStrict_grouped :: IO ()
-benchNestingEnvStrict_grouped =
-  defaultMain
+benchNestingEnvStrictGrouped :: [String] -> IO ()
+benchNestingEnvStrictGrouped args =
+  defaultMainWith args
   [ bgroup "a"
     [ bgroup "1" [s, p]
     , bgroup "2" [s, p] ]
@@ -221,15 +216,14 @@ substr = testGroup "substr"
 
   , testCase "invalid match mode" $
     shouldExitFailure $
-    withArgs ["-m", "no_such_mode"] $
-    defaultMain
+    defaultMainWith
+    ["-m", "no_such_mode"]
     [ bench "foo" (nf fib 8) ]
   ]
   where
     substr_test args str =
       shouldExitFailure $
-      withArgs args $
-      defaultMain
+      defaultMainWith args
       [ bench "don't match me" (nfIO exit)
       , bench str (nfIO (exitFailure :: IO ()))
       , bench "don't match me either" (nfIO exit)
@@ -290,57 +284,54 @@ glob = testGroup "glob"
   where
     glob_test pat str =
       shouldExitFailure $
-      withArgs ["--match=glob", pat] $
-      defaultMain
+      defaultMainWith
+      ["--match=glob", pat]
       [ bench "skip me" (nfIO (exitSuccess :: IO ()))
       , bench str (nfIO (exitFailure :: IO ())) ]
 
 csv :: TestTree
 csv = with_csv_cleanup $ testGroup "csv"
   [ testCase writing_slow_csv $
-    withArgs ["--csv", "slow.csv"] benchSlowfib
+    benchSlowfib ["--csv", "slow.csv"]
 
   , after_slow_csv $
-    testCase "comparing with baseline" $ do
-      withArgs ["--baseline", "slow.csv"] benchFastfib
+    testCase "comparing with baseline" $
+    benchFastfib ["--baseline", "slow.csv"]
 
-  , testCase "non-existing baseline" $ do
-      shouldExitFailure $ withArgs ["--baseline", "nosuch.csv"] benchFastfib
+  , testCase "non-existing baseline" $
+    shouldExitFailure $ benchFastfib ["--baseline", "nosuch.csv"]
 
   , testCase writing_quoted_csv $
-      withArgs ["--csv", "quotes.csv", "-L3"] benchQuotes
+      benchQuotes ["--csv", "quotes.csv", "-L3"]
 
   , after_quoted_csv $
-    testCase "reading baseline containing quotes" $ do
-      withArgs ["--baseline", "quotes.csv", "-L3"] benchQuotes
+    testCase "reading baseline containing quotes" $
+    benchQuotes ["--baseline", "quotes.csv", "-L3"]
 
-  , testCase writing_fast_csv $ do
-      withArgs ["--csv", "fast.csv"] benchFastfib
-
-  , after_fast_csv $
-    testCase "fail if slower" $ do
-      shouldExitFailure $
-        withArgs ["--baseline", "fast.csv", "--fail-if-slower", "10"]
-        benchSlowfib
+  , testCase writing_fast_csv $
+    benchFastfib ["--csv", "fast.csv"]
 
   , after_fast_csv $
-    testCase "fail if slower, with match" $ do
-      shouldExitFailure $
-        withArgs ["--baseline", "fast.csv" ,"--fail-if-slower", "10" ,"fib/16"]
-        benchSlowfib
+    testCase "fail if slower" $
+    shouldExitFailure $
+    benchSlowfib ["--baseline", "fast.csv", "--fail-if-slower", "10"]
 
-  , testCase "fail if slower, invalid arg" $ do
-      shouldExitFailure $ withArgs ["--fail-if-slower", "foo"] benchSlowfib
+  , after_fast_csv $
+    testCase "fail if slower, with match" $
+    shouldExitFailure $
+    benchSlowfib ["--baseline", "fast.csv" ,"--fail-if-slower", "10" ,"fib/16"]
+
+  , testCase "fail if slower, invalid arg" $
+    shouldExitFailure $ benchSlowfib ["--fail-if-slower", "foo"]
 
   , after_slow_csv $
-    testCase "fail if faster" $ do
-      shouldExitFailure $
-        withArgs ["--baseline", "slow.csv", "--fail-if-faster", "10"]
-        benchFastfib
+    testCase "fail if faster" $
+    shouldExitFailure $
+    benchFastfib ["--baseline", "slow.csv", "--fail-if-faster", "10"]
 
-  , testCase "fail if faster, invalid arg" $ do
-      shouldExitFailure $
-        withArgs ["--fail-if-faster", "foo"] benchSlowfib
+  , testCase "fail if faster, invalid arg" $
+    shouldExitFailure $
+    benchSlowfib ["--fail-if-faster", "foo"]
   ]
   where
     writing_slow_csv = "writing slow.csv"
@@ -362,18 +353,18 @@ timelimit :: TestTree
 timelimit = testGroup "timeout"
   [ testCase "time limit, long name" $
     shouldExitFailure $
-    withArgs ["--time-limit", "1e-6", "--stdev", "1e-9"] benchFib32
+    benchFib32 ["--time-limit", "1e-6", "--stdev", "1e-9"]
 
   , testCase "time limit, short name" $
     shouldExitFailure $
-    withArgs ["-L", "1e-9", "--stdev", "1e-32"] benchFib32
+    benchFib32 ["-L", "1e-9", "--stdev", "1e-32"]
 
   , testCase "time limit, return before the limit" $
-    withArgs ["-L", "1", "--stdev", "1e-32"] benchFib32
+    benchFib32 ["-L", "1", "--stdev", "1e-32"]
 
   , testCase "invalid time limit arg" $
     shouldExitFailure $
-    withArgs ["--time-limit", "foo"] benchFib32
+    benchFib32 ["--time-limit", "foo"]
 
   ]
 
@@ -381,6 +372,12 @@ timelimit = testGroup "timeout"
 -- ------------------------------------------------------------------------
 -- Auxiliary
 -- ------------------------------------------------------------------------
+
+defaultMain' :: [Benchmark] -> IO ()
+defaultMain' = defaultMainWith []
+
+defaultMainWith :: [String] -> [Benchmark] -> IO ()
+defaultMainWith args = withArgs args . Miniterion.defaultMain
 
 fib :: Int -> Integer
 fib n = if n < 2 then toInteger n else fib (n-1) + fib (n-2)
@@ -404,40 +401,29 @@ shouldExitFailure act = void (act >> throwIO ExitSuccess) `catch` \e ->
     Just (ExitFailure {}) -> pure ()
     _                     -> throwIO e
 
-emptyMain :: IO ()
-emptyMain = defaultMain []
+emptyMain :: [String] -> IO ()
+emptyMain args = defaultMainWith args []
 
 miniterionDotCabal :: FilePath
 miniterionDotCabal = "miniterion.cabal"
 
-benchFib4 :: IO ()
-benchFib4 =
-  defaultMain
+benchFib4 :: [String] -> IO ()
+benchFib4 args =
+  defaultMainWith args
   [ bgroup "fib"
     [ bench "4" (nf fib 4) ]]
 
-benchWithEnv :: IO ()
-benchWithEnv =
-  defaultMain
-  [ bgroup "a"
-    [ bench "fibnf" (nf fib 8)
-    , bench "fibwhnf" (whnf fib 8) ]
-  , env (readFile miniterionDotCabal) $ \contents ->
-      bgroup "b"
-      [ bench "wcnf" (nf wc contents)
-      , bench "wcwhnf" (whnf wc contents) ]]
-
-benchWithEnvAndPat :: IO ()
-benchWithEnvAndPat =
-  defaultMain
+benchWithEnvAndPat :: [String] -> IO ()
+benchWithEnvAndPat args =
+  defaultMainWith args
   [ env (pure (3, 4)) $ \ (a, b) ->
       bgroup "fib"
       [ bench "a" (nf fib a)
       , bench "b" (nf fib b) ]]
 
-benchWithEnvAndIrrPat :: IO ()
-benchWithEnvAndIrrPat =
-  defaultMain
+benchWithEnvAndIrrPat :: [String] -> IO ()
+benchWithEnvAndIrrPat args =
+  defaultMainWith args
   [ env (pure (3, 4)) $ \ ~(a, b) ->
       bgroup "fib"
       [ bench "a" (nf fib a)
@@ -447,9 +433,9 @@ s, p :: Benchmark
 s = bench "succ" (nf (succ :: Int -> Int) 1)
 p = bench "pred" (nf (pred :: Int -> Int) 1)
 
-benchNesting :: IO ()
-benchNesting =
-  defaultMain
+benchNesting :: [String] -> IO ()
+benchNesting args =
+  defaultMainWith args
   [ bgroup "a" [s, p]
   , bgroup "b"
     [ bgroup "1" [s, p]
@@ -460,9 +446,9 @@ benchNesting =
     , bgroup "2"
       [ bgroup "B" [s, p] ]]]
 
-benchNestingEnvStrict :: IO ()
-benchNestingEnvStrict =
-  defaultMain
+benchNestingEnvStrict :: [String] -> IO ()
+benchNestingEnvStrict args =
+  defaultMainWith args
   [ bgroup "a"
     [ bgroup "1" [s, p]
     , bgroup "2" [s, p] ]
@@ -471,40 +457,40 @@ benchNestingEnvStrict =
       [ bench "fiba" (nf fib a)
       , bench "fibb" (nf fib b) ]]
 
-benchForMatch :: IO ()
-benchForMatch =
-  defaultMain
+benchForMatch :: [String] -> IO ()
+benchForMatch args =
+  defaultMainWith args
   [ bgroup "a"
     [ bgroup "a1" [s, p]
     , bgroup "a2" [s, p] ]
   , env (pure ()) $ \_ ->
       bgroup "b" [s, p] ]
 
-benchSlowfib :: IO ()
-benchSlowfib =
-  defaultMain
+benchSlowfib :: [String] -> IO ()
+benchSlowfib args =
+  defaultMainWith args
   [ bgroup "fib"
     [ bench "4" (nf fib 4)
     , bench "8" (nf fib 8)
     , bench "16" (nf fib 16) ]]
 
-benchFib32 :: IO ()
-benchFib32 =
-  defaultMain
+benchFib32 :: [String] -> IO ()
+benchFib32 args =
+  defaultMainWith args
   [ bgroup "fib"
     [ bench "32" (nf fib 32) ]]
 
-benchFastfib :: IO ()
-benchFastfib =
-  defaultMain
+benchFastfib :: [String] -> IO ()
+benchFastfib args =
+  defaultMainWith args
   [ bgroup "fib"
     [ bench "4" (nf fib 4)
     , bench "8" (nf fastfib 8)
     , bench "16" (nf fastfib 16) ]]
 
-benchQuotes :: IO ()
-benchQuotes =
-  defaultMain
+benchQuotes :: [String] -> IO ()
+benchQuotes args =
+  defaultMainWith args
   [ bgroup "group \"one\""
     [ bgroup "a" [s, p]
     , bgroup  "b" [s, p] ]
