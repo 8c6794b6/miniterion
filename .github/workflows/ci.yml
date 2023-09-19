@@ -5,6 +5,10 @@ on:
   push:
     paths-ignore:
       - '**.md'
+    branches:
+      - '**'
+    tags:
+      - '!**'
 
 env:
   cache-version: v1
