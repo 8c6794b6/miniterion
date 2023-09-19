@@ -85,7 +85,7 @@ benchmarkable = testGroup "benchmarkable"
         ] <>
         [ testCase "perRunEnv with time limit" $
           defaultMainWith
-          ["-L2", "-s1e-9"]
+          ["-L4", "-s1e-32"]
           [ bench "fib" $
             perRunEnv
             (pure 32)
