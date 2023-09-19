@@ -30,7 +30,8 @@ jobs:
       - ${{ matrix.os }}
 
     env:
-      STACK_BUILD: stack build --test --coverage --bench
+      STACK_BUILD:
+        stack build --test --coverage --bench
 
     steps:
       - name: Checkout project repository
@@ -56,7 +57,7 @@ jobs:
         run: $STACK_BUILD --no-run-tests --no-run-benchmarks miniterion
 
       - name: Run tests and benchmarks
-        run: $STACK_BUILD miniterion
+        run: $STACK_BUILD --test-arguments "+RTS -T" miniterion
 
       - name: Generate coverage report
         uses: 8c6794b6/hpc-codecov-action@v2
@@ -94,7 +95,7 @@ jobs:
         run: cabal update
 
       - name: Configure
-        run: cabal configure
+        run: cabal configure -f+dev
 
       - name: Build
         run: cabal build

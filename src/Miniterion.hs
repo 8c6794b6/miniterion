@@ -54,6 +54,13 @@ module Miniterion
 
     -- * For interactive use
   , benchmark
+
+#ifdef DEV
+    -- * For development, exposed for testing
+  , showPicos5
+  , showBytes
+  , mu
+#endif
   ) where
 
 -- base

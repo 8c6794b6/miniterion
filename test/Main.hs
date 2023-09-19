@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 module Main (main) where
 
 -- base
@@ -35,6 +36,10 @@ main = Test.Tasty.defaultMain $
   , glob
   , csv
   , timelimit
+#ifdef DEV
+  , formatPicos
+  , formatBytes
+#endif
   ]
 
 
@@ -367,6 +372,71 @@ timelimit = testGroup "timeout"
     benchFib32 ["--time-limit", "foo"]
 
   ]
+
+#ifdef DEV
+formatPicos :: TestTree
+formatPicos = testGroup "format picos"
+  [ testCase "pico seconds" $ do
+      assertPicos 1 "1.000 ps"
+      assertPicos 12 "12.00 ps"
+      assertPicos 123 "123.0 ps"
+
+  , testCase "nano seconds" $ do
+      assertPicos 1234 "1.234 ns"
+      assertPicos 12345 "12.34 ns"
+      assertPicos 123456 "123.5 ns"
+
+  , testCase "micro seconds" $ do
+      assertPicos 1234567 ("1.235 " ++ [mu] ++ "s")
+      assertPicos 12345678 ("12.35 " ++ [mu] ++ "s")
+      assertPicos 123456789 ("123.5 " ++ [mu] ++ "s")
+
+  , testCase "milli seconds" $ do
+      assertPicos 1234567890 "1.235 ms"
+      assertPicos 12345678901 "12.35 ms"
+      assertPicos 123456789012 "123.5 ms"
+
+  , testCase "seconds" $ do
+      assertPicos 1234567890123 "1.235 s"
+      assertPicos 12345678901234 "12.35 s"
+      assertPicos 123456789012345 "123.5 s"
+      assertPicos 1234567890123456 "1234.6 s"
+  ]
+  where
+    assertPicos n str = assertEqual (show n) str (showPicos5 n)
+
+formatBytes :: TestTree
+formatBytes = testGroup "format bytes"
+  [ testCase "bytes" $ do
+      assertBytes 999 " 999 B"
+
+  , testCase "kilobytes" $ do
+      assertBytes 10188 "9.9 KB"
+      assertBytes 1023487 "999 KB"
+
+  , testCase "megabytes" $ do
+      assertBytes 1043331 "1.0 MB"
+      assertBytes 1048051711 "999 MB"
+
+  , testCase "gigabytes" $ do
+      assertBytes 10683731148 "9.9 GB"
+      assertBytes 1073204953087 "999 GB"
+
+  , testCase "terabytes" $ do
+      assertBytes 10940140696371 "9.9 TB"
+      assertBytes 1098961871962111 "999 TB"
+
+  , testCase "petabytes" $ do
+      assertBytes 11202704073084106 "9.9 PB"
+      assertBytes 1125336956889202623 "999 PB"
+
+  , testCase "exabytes" $ do
+      assertBytes 11471568970838124590 "9.9 EB"
+      assertBytes maxBound " 16 EB"
+  ]
+  where
+    assertBytes n str = assertEqual (show n) str (showBytes n)
+#endif
 
 
 -- ------------------------------------------------------------------------
