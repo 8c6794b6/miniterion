@@ -4,6 +4,7 @@
 [![codecov][codecov-badge-svg]][codecov-badge-link]
 [![Hackage][hackage-badge]][hackage-package]
 [![Stackage LTS][stackage-lts-badge]][stackage-lts-package]
+[![Stackage nightly][stackage-nightly-badge]][stackage-nightly-package]
 
 
 ## Summary
@@ -128,6 +129,9 @@ to see the help message.
 
 [stackage-lts-badge]: http://stackage.org/package/miniterion/badge/lts
 [stackage-lts-package]: http://stackage.org/lts/package/miniterion
+
+[stackage-nightly-badge]: http://stackage.org/package/miniterion/badge/nightly
+[stackage-nightly-package]: http://stackage.org/nightly/package/miniterion
 
 [criterion]: http://hackage.haskell.org/package/criterion
 [gauge]: http://hackage.haskell.org/package/gauge
