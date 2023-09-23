@@ -11,12 +11,12 @@
 
 Miniterion is a lightweight Haskell cabal package containing utilities
 for writing benchmark codes. The package has an API subset of
-[`criterion`](criterion) package, so switching to other benchmark
+[`criterion`](criterion) package, so switching to other benchmarking
 packages ([`criterion`](criterion), [`gauge`](gauge), and
 [`tasty-bench`](tasty-bench)) should be easily done.
 
 As in `criterion`, the executable built with the `defaultMain`
-function supports selecting the running benchmarks with prefix match,
+supports selecting the running benchmarks with prefix match,
 case insensitive prefix match, substring match, or glob pattern match
 via the command line option. Invoke the benchmark executable with `--help`
 option to see other available options.
@@ -26,7 +26,8 @@ option to see other available options.
 
 The goal of the miniterion package is to have a reasonably useful and
 lightweight benchmarking utility with a small amount of maintenance
-costs.
+effort. For robust and feature-rich benchmarking utility, use the
+other packages mentioned above.
 
 The miniterion package is designed to have a small number of package
 dependencies. At the time of writing, the dependency packages are only
@@ -80,7 +81,7 @@ main = defaultMain [
 
 then compile and run the benchmark with `cabal bench`:
 
-```
+```console
 $ cabal bench
 Build profile: -w ghc-9.6.2 -O1
 In order, the following will be built (use -v for more details):
@@ -110,7 +111,7 @@ Benchmark fibo: FINISH
 
 Run:
 
-```
+```console
 $ cabal run -- fibo --help
 ```
 
