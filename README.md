@@ -11,9 +11,9 @@
 
 Miniterion is a lightweight Haskell cabal package containing utilities
 for writing benchmark codes. The package has an API subset of
-[`criterion`](criterion) package, so switching to other benchmarking
-packages ([`criterion`](criterion), [`gauge`](gauge), and
-[`tasty-bench`](tasty-bench)) should be easily done.
+[`criterion`][criterion] package, so switching to other benchmarking
+packages ([`criterion`][criterion], [`gauge`][gauge], and
+[`tasty-bench`][tasty-bench]) should be easily done.
 
 As in `criterion`, the executable built with the `defaultMain`
 supports selecting the running benchmarks with prefix match,
