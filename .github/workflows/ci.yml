@@ -79,12 +79,12 @@ jobs:
         plan:
           - ghc: "9.2.8"
             cabal : "3.6.2.0"
-          - ghc: "9.4.7"
+          - ghc: "9.4.8"
             cabal: "3.8.1.0"
-          - ghc: "9.6.2"
-            cabal: "3.10.1.0"
+          - ghc: "9.6.3"
+            cabal: "3.10.2.0"
           - ghc: "9.8.1"
-            cabal: "3.10.1.0"
+            cabal: "3.10.2.0"
 
     runs-on:
       - ${{ matrix.os }}
