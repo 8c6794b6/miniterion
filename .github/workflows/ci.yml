@@ -97,14 +97,14 @@ jobs:
 
       - name: Cache ~/.ghcup
         id: home-dot-ghcup
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.ghcup
           key: ghcup-${{ runner.os }}-${{ matrix.plan.ghc }}-${{ env.cache-version }}
 
       - name: Cache cabal package database
         id: home-dot-cabal
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cabal
           key: cabal-${{ runner.os }}-${{ matrix.plan.ghc }}-${{ env.cache-version }}
