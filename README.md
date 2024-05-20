@@ -22,7 +22,7 @@ via the command line option. Invoke the benchmark executable with `--help`
 option to see other available options.
 
 
-## Philosophy
+## Motivation
 
 The goal of the miniterion package is to have a reasonably useful and
 lightweight benchmarking utility with a small amount of maintenance
