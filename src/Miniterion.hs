@@ -69,7 +69,7 @@ import           Control.Exception     (Exception (..), SomeException (..),
                                         throwIO)
 import           Control.Monad         (guard, replicateM, void, when)
 import           Data.Char             (toLower)
-import           Data.Foldable         (find, foldl')
+import           Data.Foldable         (find)
 import           Data.Int              (Int64)
 import           Data.List             (intercalate, isPrefixOf, nub,
                                         stripPrefix, tails)
@@ -90,6 +90,10 @@ import           System.Mem            (performGC)
 import           System.Timeout        (timeout)
 import           Text.Printf           (printf)
 import           Text.Read             (readMaybe)
+
+#if !MIN_VERSION_base(4,20,0)
+import           Data.Foldable         (foldl')
+#endif
 
 #if MIN_VERSION_base(4,15,0)
 import           GHC.Exts              (SPEC (..))
