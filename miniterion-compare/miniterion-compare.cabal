@@ -68,11 +68,19 @@ executable cr
     build-depends:    criterion
     mixins:           criterion (Criterion.Main as Miniterion)
 
+    -- Disabling this build until dependencies updated for ghc 9.10.
+    if impl (ghc >= 9.10)
+      buildable: False
+
 executable ga
     import:           app
     main-is:          Main.hs
     build-depends:    gauge
     mixins:           gauge (Gauge.Main as Miniterion)
+
+    -- Same as above cr, disabling.
+    if impl (ghc >= 9.10)
+      buildable: False
 
 executable ta
     import:           app
