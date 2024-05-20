@@ -70,9 +70,10 @@ jobs:
           target: stack:miniterion-test
 
       - name: Send coverage report
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           name: miniterion-test-${{ matrix.os }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   cabal-install:
     strategy:
