@@ -39,6 +39,11 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Setup haskell
+        uses: haskell-actions/setup@v2
+        with:
+          enable-stack: true
+
       - name: Cache stack
         uses: freckle/stack-cache-action@v2
 
