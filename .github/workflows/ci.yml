@@ -10,138 +10,15 @@ on:
     tags:
       - '!**'
 
-env:
-  cache-version: v2
-
-defaults:
-  run:
-    shell: bash
-
 jobs:
   stack:
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-
-    runs-on:
-      - ${{ matrix.os }}
-
-    env:
-      STACK_BUILD: stack build --test --coverage --bench
-
-    steps:
-      - name: Checkout project repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Cache stack related directories
-        uses: ./.github/actions/setup-stack-cache
-        with:
-          cache-key:
-            stack-${{ hashFiles('stack.yaml') }}-${{ env.cache-version }}
-
-      - name: Setup haskell
-        uses: haskell-actions/setup@v2
-        with:
-          enable-stack: true
-          stack-no-global: true
-
-      - name: Run stack setup
-        run: stack setup
-
-      - name: Show stack and stack ghc version
-        run: |
-          stack --version
-          stack exec -- ghc --version
-
-      - name: Install dependency packages
-        run: $STACK_BUILD --only-dependencies miniterion
-
-      - name: Build
-        run: $STACK_BUILD --no-run-tests --no-run-benchmarks miniterion
-
-      - name: Run tests and benchmarks
-        run: $STACK_BUILD --test-arguments "+RTS -T" miniterion
-
-      - name: Generate coverage report
-        uses: 8c6794b6/hpc-codecov-action@v4
-        with:
-          target: stack:miniterion-test
-
-      - name: Send coverage report
-        uses: codecov/codecov-action@v4
-        with:
-          name: miniterion-test-${{ matrix.os }}
-          token: ${{ secrets.CODECOV_TOKEN }}
+    uses: ./.github/workflows/stack.yml
+    secrets: inherit
+    with:
+      cache: v2
 
   cabal-install:
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-          # - macos-latest
-          # - windows-latest
-        plan:
-          - ghc: "9.2.8"
-            cabal : "3.6.2.0"
-          - ghc: "9.4.8"
-            cabal: "3.8.1.0"
-          - ghc: "9.6.5"
-            cabal: "3.10.3.0"
-          - ghc: "9.8.2"
-            cabal: "3.10.3.0"
-          - ghc: "9.10.1"
-            cabal: "3.10.3.0"
-
-    runs-on:
-      - ${{ matrix.os }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Cache ~/.ghcup
-        id: home-dot-ghcup
-        uses: actions/cache@v4
-        with:
-          path: ~/.ghcup
-          key: ghcup-${{ runner.os }}-${{ matrix.plan.ghc }}-${{ env.cache-version }}
-
-      - name: Cache cabal package database
-        id: home-dot-cabal
-        uses: actions/cache@v4
-        with:
-          path: ~/.cabal
-          key: cabal-${{ runner.os }}-${{ matrix.plan.ghc }}-${{ env.cache-version }}
-
-      - name: Install ghc and cabal-install
-        run: |
-          ghcup upgrade
-          ghcup install cabal ${{ matrix.plan.cabal }}
-          ghcup install ghc ${{ matrix.plan.ghc }}
-          ghcup set ghc ${{ matrix.plan.ghc }}
-          which cabal
-          which ghc
-
-      - name: Show versions
-        run: |
-          ghc --version
-          cabal --version
-
-      - name: Update hackage data
-        run: cabal update
-
-      - name: Configure
-        run: cabal configure -f+dev
-
-      - name: Build
-        run: cabal build
-
-      - name: Run tests
-        run: cabal test
+    uses: ./.github/workflows/cabal-install.yml
+    secrets: inherit
+    with:
+      cache: v2
