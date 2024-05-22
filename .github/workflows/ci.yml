@@ -11,7 +11,7 @@ on:
       - '!**'
 
 env:
-  cache-version: v1
+  cache-version: v2
 
 defaults:
   run:
@@ -30,8 +30,7 @@ jobs:
       - ${{ matrix.os }}
 
     env:
-      STACK_BUILD:
-        stack build --test --coverage --bench
+      STACK_BUILD: stack build --test --coverage --bench
 
     steps:
       - name: Checkout project repository
@@ -39,21 +38,25 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Cache stack related directories
+        uses: ./.github/actions/setup-stack-cache
+        with:
+          cache-key:
+            stack-${{ hashFiles('stack.yaml') }}-${{ env.cache-version }}
+
       - name: Setup haskell
         uses: haskell-actions/setup@v2
         with:
           enable-stack: true
+          stack-no-global: true
 
-      - name: Cache stack
-        uses: freckle/stack-cache-action@v2
+      - name: Run stack setup
+        run: stack setup
 
-      - name: Show stack version
+      - name: Show stack and stack ghc version
         run: |
           stack --version
           stack exec -- ghc --version
-
-      - name: Set stack to use system ghc
-        run: stack config set system-ghc --global true
 
       - name: Install dependency packages
         run: $STACK_BUILD --only-dependencies miniterion
