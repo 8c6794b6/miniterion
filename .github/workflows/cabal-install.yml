@@ -1,3 +1,5 @@
+name: cabal-install
+
 on:
   workflow_call:
     inputs:
