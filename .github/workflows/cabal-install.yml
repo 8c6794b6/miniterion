@@ -34,35 +34,27 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Cache ~/.ghcup
-        uses: actions/cache@v4
-        with:
-          path: ~/.ghcup
-          key: ghcup-${{ matrix.plan.ghc }}-${{ inputs.cache }}
+      - name: Get home directory
+        id: get-home
+        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
 
       - name: Cache cabal package database
         id: home-dot-cabal
         uses: actions/cache@v4
         with:
-          path: ~/.cabal
+          path: ${{ steps.get-home.outputs.home }}/.cabal
           key: cabal-${{ matrix.plan.ghc }}-${{ inputs.cache }}
 
-      - name: Install ghc and cabal-install
-        run: |
-          ghcup upgrade
-          ghcup install cabal ${{ matrix.plan.cabal }}
-          ghcup install ghc ${{ matrix.plan.ghc }}
-          ghcup set ghc ${{ matrix.plan.ghc }}
-          which cabal
-          which ghc
+      - name: Setup ghc and cabal-install
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.plan.ghc }}
+          cabal-version: ${{ matrix.plan.cabal }}
 
-      - name: Show versions
+      - name: Show paths and versions
         run: |
-          ghc --version
-          cabal --version
-
-      - name: Update hackage data
-        run: cabal update
+          which ghc && ghc --version
+          which cabal && cabal --version
 
       - name: Configure
         run: cabal configure -f+dev
