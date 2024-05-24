@@ -447,7 +447,15 @@ defaultMain' :: [Benchmark] -> IO ()
 defaultMain' = defaultMainWith []
 
 defaultMainWith :: [String] -> [Benchmark] -> IO ()
-defaultMainWith args = withArgs args . Miniterion.defaultMain
+defaultMainWith args = withArgs args' . Miniterion.defaultMain
+  where
+#if linux_HOST_OS
+    -- Running the tests in CI for other os than Linux is slow, using
+    -- higher value for stdev to speed.
+    args' = args
+#else
+    args' = "--stdev=20" : args
+#endif
 
 fib :: Int -> Integer
 fib n = if n < 2 then toInteger n else fib (n-1) + fib (n-2)
