@@ -1,5 +1,9 @@
 # Revision history for miniterion
 
+## Unreleased
+
+* Suppress warning messages in ghc 9.10.
+
 ## 0.1.1.0 -- 2023-09-20
 
 * Update version bounds of ``deepseq``.
