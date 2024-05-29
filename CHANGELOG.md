@@ -1,6 +1,6 @@
 # Revision history for miniterion
 
-## Unreleased
+## 0.1.1.1 -- 2024-05-29
 
 * Suppress warning messages in ghc 9.10.
 
