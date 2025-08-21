@@ -19,12 +19,14 @@ jobs:
             cabal : "3.6.2.0"
           - ghc: "9.4.8"
             cabal: "3.8.1.0"
-          - ghc: "9.6.5"
+          - ghc: "9.6.7"
             cabal: "3.10.3.0"
-          - ghc: "9.8.2"
+          - ghc: "9.8.4"
             cabal: "3.10.3.0"
-          - ghc: "9.10.1"
-            cabal: "3.10.3.0"
+          - ghc: "9.10.2"
+            cabal: "3.12.1.0"
+          - ghc: "9.12.2"
+            cabal: "3.14.1.1"
 
     runs-on: ubuntu-latest
 
