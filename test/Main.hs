@@ -6,11 +6,15 @@ import           Control.Exception  (catch, fromException, throwIO)
 import           Data.Functor       (void)
 import           System.Environment (withArgs)
 import           System.Exit        (ExitCode (..), exitFailure, exitSuccess)
-import           System.IO.Error    (isDoesNotExistError)
 import           System.Info        (os)
+import           System.IO          (stderr, stdout)
+import           System.IO.Error    (isDoesNotExistError)
 
 -- directory
 import           System.Directory   (removeFile)
+
+-- silently
+import           System.IO.Silently (hSilence)
 
 -- tasty
 import           Test.Tasty
@@ -98,7 +102,7 @@ benchmarkable = testGroup "benchmarkable"
 
   , testGroup "interactive"
     [ testCase "simple function" $
-      benchmark (nf not True) ]
+      quietly $ benchmark (nf not True) ]
   ]
 
 options :: TestTree
@@ -365,7 +369,7 @@ timelimit = testGroup "timeout"
     benchFib32 ["-L", "1e-9", "--stdev", "1e-32"]
 
   , testCase "time limit, return before the limit" $
-    benchFib32 ["-L", "1", "--stdev", "1e-32"]
+    benchFib32 ["-L", "5", "--stdev", "10"]
 
   , testCase "invalid time limit arg" $
     shouldExitFailure $
@@ -447,7 +451,7 @@ defaultMain' :: [Benchmark] -> IO ()
 defaultMain' = defaultMainWith []
 
 defaultMainWith :: [String] -> [Benchmark] -> IO ()
-defaultMainWith args = withArgs args' . Miniterion.defaultMain
+defaultMainWith args = quietly . withArgs args' . Miniterion.defaultMain
   where
 #if linux_HOST_OS
     -- Running the tests in CI for other os than Linux is slow, using
@@ -456,6 +460,9 @@ defaultMainWith args = withArgs args' . Miniterion.defaultMain
 #else
     args' = "--stdev=20" : args
 #endif
+
+quietly :: IO a -> IO a
+quietly = hSilence [stdout, stderr]
 
 fib :: Int -> Integer
 fib n = if n < 2 then toInteger n else fib (n-1) + fib (n-2)
