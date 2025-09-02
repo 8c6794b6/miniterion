@@ -137,7 +137,7 @@ data Benchmarkable = forall a. NFData a =>
                 , runRepeatedly :: a -> Word64 -> IO ()
                 , perRun        :: Bool }
 
--- | Construct a 'Benchmarkable' value from an impure action, where
+-- | Construct a t'Benchmarkable' value from an impure action, where
 -- the 'Word64' parameter indicates the number of times to run the
 -- action.
 --
@@ -162,7 +162,7 @@ defaultMain bs = do
   act
 #endif
 
--- | Attach a name to 'Benchmarkable'.
+-- | Attach a name to t'Benchmarkable'.
 --
 -- The type signature is compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:bench bench>@.
