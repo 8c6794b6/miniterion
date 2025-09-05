@@ -77,16 +77,16 @@ import           Data.Word             (Word64)
 import           GHC.Clock             (getMonotonicTime)
 import           GHC.Stats             (RTSStats (..), getRTSStats,
                                         getRTSStatsEnabled)
-import           System.CPUTime        (cpuTimePrecision, getCPUTime)
 import           System.Console.GetOpt (ArgDescr (..), ArgOrder (..),
                                         OptDescr (..), getOpt', usageInfo)
+import           System.CPUTime        (cpuTimePrecision, getCPUTime)
 import           System.Environment    (getArgs, getProgName)
 import           System.Exit           (die, exitFailure)
 import           System.IO             (BufferMode (..), Handle, IOMode (..),
                                         hFlush, hIsTerminalDevice, hPutStrLn,
                                         hSetBuffering, stderr, stdout, withFile)
 import           System.IO.Unsafe      (unsafePerformIO)
-import           System.Mem            (performGC)
+import           System.Mem            (performGC, performMinorGC)
 import           System.Timeout        (timeout)
 import           Text.Printf           (printf)
 import           Text.Read             (readMaybe)
@@ -1075,6 +1075,7 @@ measure cfg n Benchmarkable{..} =
     (startAllocs, startCopied, startMaxMemInUse) <- getAllocsAndCopied
     runRepeatedly env0 n
     endTime <- getTimePicoSecs'
+    performMinorGC -- update RTSStats
     (endAllocs, endCopied, endMaxMemInUse) <- getAllocsAndCopied
     let meas = Measurement
           { measTime   = endTime - startTime

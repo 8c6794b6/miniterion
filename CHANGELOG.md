@@ -4,6 +4,8 @@
 
 * Silence the outputs in tests.
 
+* Perform minor GC after running target function to update RTSStats.
+
 ## 0.1.1.1 -- 2024-05-29
 
 * Suppress warning messages in ghc 9.10.
