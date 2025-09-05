@@ -401,9 +401,9 @@ formatPicos = testGroup "format picos"
       assertPicos 123456789012 "123.5 ms"
 
   , testCase "seconds" $ do
-      assertPicos 1234567890123 "1.235 s"
-      assertPicos 12345678901234 "12.35 s"
-      assertPicos 123456789012345 "123.5 s"
+      assertPicos 1234567890123 "1.235 s "
+      assertPicos 12345678901234 "12.35 s "
+      assertPicos 123456789012345 "123.5 s "
       assertPicos 1234567890123456 "1234.6 s"
   ]
   where

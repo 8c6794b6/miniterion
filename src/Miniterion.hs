@@ -579,8 +579,9 @@ showPicos5 i
   | t < 999e7  = printf "%.3f ms" (t / 1e9)
   | t < 999e8  = printf "%.2f ms" (t / 1e9)
   | t < 999e9  = printf "%.1f ms" (t / 1e9)
-  | t < 999e10 = printf "%.3f s" (t / 1e12)
-  | t < 999e11 = printf "%.2f s" (t / 1e12)
+  | t < 999e10 = printf "%.3f s " (t / 1e12)
+  | t < 999e11 = printf "%.2f s " (t / 1e12)
+  | t < 999e12 = printf "%.1f s " (t / 1e12)
   | otherwise  = printf "%4.1f s" (t / 1e12)
   where
     t = word64ToDouble i
