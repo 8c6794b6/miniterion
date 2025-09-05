@@ -1063,9 +1063,15 @@ predictPerturbed t1 t2 = Estimate
     (estStdev (predict (hi t1) (lo t2)))
   }
   where
-    prec = max (fromInteger cpuTimePrecision) 1000000000 -- 1 ms
+    prec = max (fromInteger cpuTimePrecision) oneMillisecond
     hi meas = meas { measTime = measTime meas + prec }
-    lo meas = meas { measTime = measTime meas - prec }
+    lo meas | measTime meas > prec = meas { measTime = measTime meas - prec }
+            | otherwise            = meas { measTime = 0 }
+
+-- | One millisecond in picoseconds.
+oneMillisecond :: Num a => a
+oneMillisecond = 1000000000
+{-# INLINE oneMillisecond #-}
 
 measure :: Config -> Word64 -> Benchmarkable -> IO Measurement
 measure cfg n Benchmarkable{..} =
