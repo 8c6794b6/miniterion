@@ -9,6 +9,9 @@
 * Discared measurement results with its total duration shorter than
   threshold when initializing batch benchmarks.
 
+* Modify time out detection to refer benchmark start and end time
+  instead of adding up measurement durations.
+
 * Modify output with ``-v2`` flag to show divided time.
 
 * Perform minor GC after running target function to update RTSStats.

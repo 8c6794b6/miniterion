@@ -1143,7 +1143,12 @@ oneMillisecond = 1000000000
 {-# INLINE oneMillisecond #-}
 
 measure :: Config -> Word64 -> Benchmarkable -> IO Measurement
-measure cfg n Benchmarkable{..} =
+measure cfg n b = fmap fst (measureAndEndTime cfg n b)
+{-# INLINE measure #-}
+
+measureAndEndTime :: Config -> Word64 -> Benchmarkable
+                   -> IO (Measurement, Word64)
+measureAndEndTime cfg n Benchmarkable{..} =
   bracket (allocEnv n) (cleanEnv n) $ \env0 -> do
     let getTimePicoSecs' = getTimePicoSecs (cfgTimeMode cfg)
     performGC
@@ -1165,7 +1170,7 @@ measure cfg n Benchmarkable{..} =
       ++ (if n == 1 then " iteration gives " else " iterations give ")
       ++ formatMeasurement n meas ++ "\n"
 
-    pure meas
+    pure (meas, endTime)
 
 measureUntil :: Config -> Benchmarkable -> IO Summary
 measureUntil cfg@Config{..} b
@@ -1176,43 +1181,45 @@ measureUntil cfg@Config{..} b
           stdev = toRanged 0
           mean = toRanged t
       pure (Summary (Estimate meas 0) mean stdev med rsq)
-  | perRun b = initializeSingle cfg b >>= uncurry go
-  | otherwise = initializeBatch cfg b >>= uncurry go
+  | perRun b = go_with initializeSingle
+  | otherwise = go_with initializeBatch
   where
-    go :: Runner r => Word64 -> r -> IO Summary
-    go !sum_of_ts r = do
-      let t1 = previousMeasurement r
-      t2 <- measure cfg (numRepeats r) b
+    go_with initializer = do
+      t_start <- getTimePicoSecs cfgTimeMode
+      runner <- initializer cfg b
+      go t_start runner
 
-      let sum_of_ts' = sum_of_ts + measTime t1
-          est@(Estimate measN stdevN) = computeEstimate r t1 t2
+    go :: Runner r => Word64 -> r -> IO Summary
+    go t_start r = do
+      let m1 = previousMeasurement r
+      (m2, t_end) <- measureAndEndTime cfg (numRepeats r) b
+
+      let est@(Estimate measN stdevN) = computeEstimate r m1 m2
           meanN = measTime measN
-          extra = timeoutExtra r t2
-          is_timeout_soon = timeoutSoon cfgTimeout (sum_of_ts' + extra)
+          extra = timeoutExtra r m2
+          is_timeout_soon = timeoutSoon cfgTimeout t_start (t_end + extra)
           target_stdev = truncate (cfgRelStDev * word64ToDouble meanN)
           is_stdev_in_target_range = stdevN < target_stdev
 
-      warnOnTooLongBenchmark cfgTimeout sum_of_ts' t2
+      warnOnTooLongBenchmark cfgTimeout t_start t_end
 
       if is_stdev_in_target_range || is_timeout_soon
-        then pure $ summarize r t2 est
-        else go sum_of_ts' (updateForNextRun r t2 est)
+        then pure $ summarize r m2 est
+        else go t_start (updateForNextRun r m2 est)
     {-# SPECIALIZE go :: Word64 -> Batch -> IO Summary #-}
-    {-# SPECIALIZE go :: Word64 -> Single-> IO Summary #-}
+    {-# SPECIALIZE go :: Word64 -> Single -> IO Summary #-}
 
--- XXX: Return the end time from measure, compare with t0. Then,
--- replace sum_of_ts.
-timeoutSoon :: Timeout -> Word64 -> Bool
-timeoutSoon NoTimeout _ = False
-timeoutSoon (Timeout micros) sum_of_ts = micros <= sum_of_ts `quot` divis
-  where
-    divis = 1000000 * 10 `quot` 12
+timeoutSoon :: Timeout -> Word64 -> Word64 -> Bool
+timeoutSoon tout t_start t_end_of_next_run =
+  case tout of
+    NoTimeout      -> False
+    Timeout micros -> 1000000 * micros <= (t_end_of_next_run - t_start)
 {-# INLINABLE timeoutSoon #-}
 
-warnOnTooLongBenchmark :: Timeout -> Word64 -> Measurement -> IO ()
-warnOnTooLongBenchmark tout sum_of_ts meas =
+warnOnTooLongBenchmark :: Timeout -> Word64 -> Word64 -> IO ()
+warnOnTooLongBenchmark tout t_start t_now =
   case tout of
-    NoTimeout | sum_of_ts + measTime meas > 100 * 1000000000000 ->
+    NoTimeout | t_now - t_start > 100 * 1000000000000 ->
       hPutStrLn stderr $
                 "\n" ++
                 "This benchmark takes more than 100 seconds.\n" ++
@@ -1247,30 +1254,29 @@ data Batch = Batch
   , btQueue               :: !(Queue Word64)
   }
 
-initializeBatch :: Config -> Benchmarkable -> IO (Word64, Batch)
+initializeBatch :: Config -> Benchmarkable -> IO Batch
 initializeBatch cfg b = do
   debugStr cfg "*** Starting initialization\n"
-  go 0 1
+  go 1
   where
     threshold =
       max (fromInteger cpuTimePrecision) oneMillisecond * 30
-    go sum_of_ts n = do
+    go n = do
       meas@(Measurement t _ _ _) <- measure cfg n b
       if t < threshold
         -- Discarding Measurement data when the total duration is
         -- shorter than threshold. Too short measurement is considered
         -- imprecise and unreliable.
-        then go (sum_of_ts + t) (n * 2)
+        then go (n * 2)
         else do
           debugStr cfg "*** Initialization done\n"
           let t_scaled = t `quot` n
-          pure ( sum_of_ts
-               , Batch { btPreviousNumRepeats = n
-                       , btPreviousMeasurement = meas
-                       , btNumRepeats = 2 * n
-                       , btMeanMinMax = toMinMax t_scaled
-                       , btQueue = enqueue t_scaled defaultQueue
-                       })
+          pure Batch { btPreviousNumRepeats = n
+                     , btPreviousMeasurement = meas
+                     , btNumRepeats = 2 * n
+                     , btMeanMinMax = toMinMax t_scaled
+                     , btQueue = enqueue t_scaled defaultQueue
+                     }
 
 instance Runner Batch where
   numRepeats = btNumRepeats
@@ -1282,7 +1288,7 @@ instance Runner Batch where
   computeEstimate _bt t1 t2 = predictPerturbed t1 t2
   {-# INLINE computeEstimate #-}
 
-  timeoutExtra _bt m = 3 * measTime m
+  timeoutExtra _bt m = 2 * measTime m + (30 * oneMillisecond)
   {-# INLINE timeoutExtra #-}
 
   summarize bt t2 (Estimate measN _stdevN) =
@@ -1332,23 +1338,22 @@ data Single = Single
   , snQueue               :: !(Queue Word64)
   }
 
-initializeSingle :: Config -> Benchmarkable -> IO (Word64, Single)
+initializeSingle :: Config -> Benchmarkable -> IO Single
 initializeSingle cfg b = do
-  t1 <- measure cfg 1 b
-  t2 <- measure cfg 1 b
-  let ts = [t1, t2]
+  m1 <- measure cfg 1 b
+  m2 <- measure cfg 1 b
+  let ts = [m1, m2]
       agg = initAgg ts
-      mean_mm = toMinMax (measTime t1) <> toMinMax (measTime t2)
-      stdev = estStdev (aggToEstimate t1 t2 agg)
+      mean_mm = toMinMax (measTime m1) <> toMinMax (measTime m2)
+      stdev = estStdev (aggToEstimate m1 m2 agg)
       stdev_mm = toMinMax stdev
-  pure ( measTime t1 + measTime t2
-       , Single { snAggregate = agg
-                , snMeanMinMax = mean_mm
-                , snStdevMinMax = stdev_mm
-                , snPreviousMeasurement = t2
-                , snQueue = enqueue (measTime t2)
-                            (enqueue (measTime t1) defaultQueue)
-                })
+  pure Single { snAggregate = agg
+              , snMeanMinMax = mean_mm
+              , snStdevMinMax = stdev_mm
+              , snPreviousMeasurement = m2
+              , snQueue = enqueue (measTime m2)
+                          (enqueue (measTime m1) defaultQueue)
+              }
 
 instance Runner Single where
   numRepeats _sn = 1
@@ -1360,7 +1365,7 @@ instance Runner Single where
   computeEstimate sn t1 t2 = aggToEstimate t1 t2 (snAggregate sn)
   {-# INLINE computeEstimate #-}
 
-  timeoutExtra _sn m = max (10 * measTime m) (250 * oneMillisecond)
+  timeoutExtra _sn m = max (10 * measTime m) (30 * oneMillisecond)
   {-# INLINE timeoutExtra #-}
 
   summarize sn t2 est =
