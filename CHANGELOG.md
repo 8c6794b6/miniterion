@@ -2,9 +2,18 @@
 
 ## Unreleased
 
-* Silence the outputs in tests.
+* Show R², median, and min/max values in benchmark results.
+
+* Modify CSV format to follow the template used in Criterion.
+
+* Discared measurement results with its total duration shorter than
+  threshold when initializing batch benchmarks.
+
+* Modify output with ``-v2`` flag to show divided time.
 
 * Perform minor GC after running target function to update RTSStats.
+
+* Silence the outputs in tests.
 
 ## 0.1.1.1 -- 2024-05-29
 

@@ -60,6 +60,15 @@ module Miniterion
   , showPicos5
   , showBytes
   , mu
+
+  , Ranged(..)
+  , fitInRange
+
+  , Queue(..)
+  , defaultQueue
+  , enqueue
+  , dequeue
+  , toList
 #endif
   ) where
 
@@ -67,12 +76,12 @@ module Miniterion
 import           Control.Exception     (Exception (..), SomeException (..),
                                         bracket, evaluate, handle, throw,
                                         throwIO)
-import           Control.Monad         (guard, replicateM, void, when)
+import           Control.Monad         (guard, void, when)
 import           Data.Char             (toLower)
 import           Data.Foldable         (find)
 import           Data.Int              (Int64)
-import           Data.List             (intercalate, isPrefixOf, nub,
-                                        stripPrefix, tails)
+import           Data.List             (intercalate, isPrefixOf, nub, sort,
+                                        stripPrefix, tails, unfoldr)
 import           Data.Word             (Word64)
 import           GHC.Clock             (getMonotonicTime)
 import           GHC.Stats             (RTSStats (..), getRTSStats,
@@ -351,7 +360,8 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
             hSetBuffering hdl LineBuffering
             let extras | hasGCStats = ",Allocated,Copied,Peak Memory"
                        | otherwise = ""
-            hPutStrLn hdl ("Name,Mean (ps),2*Stdev (ps)" ++ extras)
+                header = "Name,Mean,MeanLB,MeanUB,Stddev,StddevLB,StddevUB"
+            hPutStrLn hdl (header ++ extras)
             act cfg2 {cfgCsvHandle = Just hdl}
       root_bs = bgroup "" bs
       do_bench = with_csv_cfg $ \cfg -> do
@@ -472,7 +482,7 @@ runBenchmarkable cfg parents name b = do
   infoStr cfg (white "benchmarking " ++ boldCyan fullname ++ " ")
   debugStr cfg "\n"
   hFlush stdout
-  mb_est <- withTimeout (cfgTimeout cfg) (measureUntil cfg b)
+  mb_sum <- withTimeout (cfgTimeout cfg) (measureUntil cfg b)
 
   let upper = 1 + cfgFailIfSlower cfg
       lower = 1 - cfgFailIfFaster cfg
@@ -480,16 +490,17 @@ runBenchmarkable cfg parents name b = do
         | upper <= cmp = TooSlow fullname
         | cmp <= lower = TooFast fullname
         | otherwise = Done
-      (result, mb_cmp) = case mb_est of
+      (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
-        Just est -> case compareVsBaseline (cfgBaselineSet cfg) fullname est of
-          Nothing  -> (Done, Nothing)
-          Just cmp -> (is_acceptable cmp, Just cmp)
+        Just (Summary est _ _ _ _) ->
+          case compareVsBaseline (cfgBaselineSet cfg) fullname est of
+            Nothing  -> (Done, Nothing)
+            Just cmp -> (is_acceptable cmp, Just cmp)
       csvname = encodeCsv fullname
       put_csv_line hdl =
-        mapM_ (\e -> hPutStrLn hdl (csvname ++ "," ++ csvEstimate e)) mb_est
+        mapM_ (\e -> hPutStrLn hdl (csvname ++ "," ++ csvSummary e)) mb_sum
 
-  infoStr cfg (formatResult result mb_est mb_cmp)
+  infoStr cfg (formatResult result mb_sum mb_cmp)
   mapM_ put_csv_line (cfgCsvHandle cfg)
   pure result
 
@@ -539,20 +550,42 @@ putWith n act cfg x = when (n <= cfgVerbosity cfg) $ act x
 -- Formatting
 -- ------------------------------------------------------------------------
 
-formatResult :: Result -> Maybe Estimate -> Maybe Double -> String
+formatResult :: Result -> Maybe Summary -> Maybe Double -> String
 formatResult _ Nothing _ =
   red "FAIL" ++ "\n" ++
   yellow "Timed out while running this benchmark\n\n"
-formatResult res (Just (Estimate m stdev)) mb_cmp =
+formatResult res (Just summary) mb_cmp =
   fail_or_blank ++ "\n" ++
-  white "mean                 " ++ showPicos5 (measTime m) ++
+  --
+  white "mean                 " ++ showPicos5 (measTime m) ++ "   " ++
+  show_minmax (irLo mean) (irHi mean) ++
   maybe "" (formatSlowDown res) mb_cmp ++ "\n" ++
-  white "std dev              " ++ showPicos5 (2 * stdev) ++
+  --
+  id    "                     " ++ rsq_str id (irMid rsq) ++ "   " ++
+  show_minmax_rsq ++ "\n" ++
+  --
+  white "median               " ++ showPicos5 (irMid med) ++ "   " ++
+  show_minmax (irLo med) (irHi med) ++ "\n" ++
+  --
+  white "std dev              " ++ showPicos5 (2 * irMid stdev) ++ "   " ++
+  show_minmax (2 * irLo stdev) (2 * irHi stdev) ++
+  --
   formatGC m ++ "\n\n"
   where
+    Summary (Estimate m _) mean stdev med rsq = summary
     fail_or_blank
       | isTooFast res || isTooSlow res = red "FAIL"
       | otherwise = ""
+    show_minmax lo hi =
+      white ("(" ++ showPicos5 lo ++ " .. " ++ showPicos5 hi ++ ")")
+    rsq_str on_otherwise val = color (printf "%.3f R²" val)
+      where
+        color | val < 0.6 = red
+              | val < 0.9 = yellow
+              | otherwise = on_otherwise
+    show_minmax_rsq =
+      white "(" ++ rsq_str white (irLo rsq) ++ white " .. " ++
+      rsq_str white (irHi rsq) ++ white ")"
 
 formatSlowDown :: Result -> Double -> String
 formatSlowDown result ratio = case percents `compare` 0 of
@@ -595,6 +628,7 @@ formatGC (Measurement _ a c p)
   where
     sb = showBytes
 
+-- | Show bytes with unit.
 showBytes :: Word64 -> String
 showBytes i
   | t < 1000                 = printf " %3.0f B" t
@@ -613,10 +647,13 @@ showBytes i
   where
     t = word64ToDouble i
 
-formatMeasurement :: Measurement -> String
-formatMeasurement (Measurement t a c m) =
-  printf "%d ps, alloc: %d copied: %d max: %d" t a c m
-
+formatMeasurement :: Word64 -> Measurement -> String
+formatMeasurement n (Measurement t a c m) =
+  showPicos5 (t `quot` n) ++ printf " (%d/%d)" t n ++
+  if hasGCStats then
+    printf " alloc: %d copied: %d max: %d" a c m
+  else
+    ""
 
 -- ------------------------------------------------------------------------
 -- Matching benchmark names
@@ -690,6 +727,7 @@ isTerminalDevice :: Bool
 isTerminalDevice = unsafePerformIO (hIsTerminalDevice stdout)
 {-# NOINLINE isTerminalDevice #-}
 
+-- | Unit character for microseconds.
 mu :: Char
 mu = if hasUnicodeSupport then 'μ' else 'u'
 
@@ -714,14 +752,19 @@ hasUnicodeSupport = False
 -- XXX: Could use `Data.Set.Set'.
 type Baseline = [String]
 
-csvEstimate :: Estimate -> String
-csvEstimate (Estimate m stdev)
+csvSummary :: Summary -> String
+csvSummary (Summary (Estimate m _) mean stdev _med _)
   | hasGCStats = time ++ "," ++ gc
   | otherwise = time
   where
-    time = show (measTime m) ++ "," ++ show (2 * stdev)
-    gc = show (measAllocs m) ++ "," ++ show (measCopied m) ++ "," ++
-         show (measMaxMem m)
+    time =
+      show (measTime m) ++ "," ++
+      show (irLo mean) ++ "," ++ show (irHi mean) ++ "," ++
+      show (2 * irMid stdev) ++ "," ++
+      show (2 * irLo stdev) ++ "," ++ show (2 * irHi stdev)
+    gc =
+      show (measAllocs m) ++ "," ++ show (measCopied m) ++ "," ++
+      show (measMaxMem m)
 
 readBaseline :: FilePath -> IO Baseline
 readBaseline path = handle handler go
@@ -760,8 +803,10 @@ compareVsBaseline baseline name (Estimate m stdev) = fmap comp mb_old
           (_, []) -> pure hd
           _       -> Nothing
 
-      (time_cell, ',' : rest) <- span (/= ',') <$> stripPrefix prefix line
-      let sigma_x_2_cell = takeWhile (/= ',') rest
+      (time_cell, ',' : rest0) <- span (/= ',') <$> stripPrefix prefix line
+      (_time_lb_cell, ',' : rest1) <- pure (span (/= ',') rest0)
+      (_time_ub_cell, ',' : rest2) <- pure (span (/= ',') rest1)
+      let sigma_x_2_cell = takeWhile (/= ',') rest2
       (,) <$> readMaybe time_cell <*> readMaybe sigma_x_2_cell
 
 encodeCsv :: String -> String
@@ -1022,7 +1067,7 @@ hasGCStats = False
 -- ------------------------------------------------------------------------
 
 data Timeout
-  = Timeout Prelude.Integer -- ^ number of microseconds (e.g., 200000)
+  = Timeout !Word64 -- ^ number of microseconds (e.g., 200000)
   | NoTimeout
 
 data Measurement = Measurement
@@ -1035,6 +1080,19 @@ data Measurement = Measurement
 data Estimate = Estimate
   { estMean  :: {-# UNPACK #-} !Measurement
   , estStdev :: {-# UNPACK #-} !Word64  -- ^ stdev in picoseconds
+  }
+
+type Mean = Ranged Word64
+type Stdev = Ranged Word64
+type Median = Ranged Word64
+type RSquared = Ranged Double
+
+data Summary = Summary
+  { smEstimate :: {-# UNPACK #-} !Estimate
+  , smMean     :: {-# UNPACK #-} !Mean
+  , smStdev    :: {-# UNPACK #-} !Stdev
+  , smMedian   :: {-# UNPACK #-} !Median
+  , smRSquared :: {-# UNPACK #-} !RSquared
   }
 
 sqr :: Num a => a -> a
@@ -1068,6 +1126,17 @@ predictPerturbed t1 t2 = Estimate
     lo meas | measTime meas > prec = meas { measTime = measTime meas - prec }
             | otherwise            = meas { measTime = 0 }
 
+predictStdevs :: Measurement -> Measurement -> [Word64]
+predictStdevs t1 t2 = map estStdev [v1,v2,v3,v4]
+  where
+    v1 = predict (lo t1) (lo t2)
+    v2 = predict (lo t1) (hi t2)
+    v3 = predict (hi t1) (lo t2)
+    v4 = predict (hi t1) (hi t2)
+    lo m = m { measTime = measTime m - prec }
+    hi m = m { measTime = measTime m + prec }
+    prec = max (fromInteger cpuTimePrecision) oneMillisecond
+
 -- | One millisecond in picoseconds.
 oneMillisecond :: Num a => a
 oneMillisecond = 1000000000
@@ -1094,66 +1163,235 @@ measure cfg n Benchmarkable{..} =
     debugStr cfg $
       show n
       ++ (if n == 1 then " iteration gives " else " iterations give ")
-      ++ formatMeasurement meas ++ "\n"
+      ++ formatMeasurement n meas ++ "\n"
 
     pure meas
 
-measureUntil :: Config -> Benchmarkable -> IO Estimate
-measureUntil cfg@Config{..} b = do
-  t1 <- measure' 1 b
-  if isInfinite cfgRelStDev && cfgRelStDev > 0
-    then pure Estimate {estMean = t1, estStdev = 0}
-    else getAggregateMaybe t1 >>= go 1 t1 0
+measureUntil :: Config -> Benchmarkable -> IO Summary
+measureUntil cfg@Config{..} b
+  | isInfinite cfgRelStDev && cfgRelStDev > 0 = do
+      meas@(Measurement t _ _ _) <- measure cfg 1 b
+      let med = toRanged t
+          rsq = toRanged 0
+          stdev = toRanged 0
+          mean = toRanged t
+      pure (Summary (Estimate meas 0) mean stdev med rsq)
+  | perRun b = initializeSingle cfg b >>= uncurry go
+  | otherwise = initializeBatch cfg b >>= uncurry go
   where
-    measure' = measure cfg
+    go :: Runner r => Word64 -> r -> IO Summary
+    go !sum_of_ts r = do
+      let t1 = previousMeasurement r
+      t2 <- measure cfg (numRepeats r) b
 
-    numInit :: Num a => a
-    numInit = 8
+      let sum_of_ts' = sum_of_ts + measTime t1
+          est@(Estimate measN stdevN) = computeEstimate r t1 t2
+          meanN = measTime measN
+          extra = timeoutExtra r t2
+          is_timeout_soon = timeoutSoon cfgTimeout (sum_of_ts' + extra)
+          target_stdev = truncate (cfgRelStDev * word64ToDouble meanN)
+          is_stdev_in_target_range = stdevN < target_stdev
 
-    getAggregateMaybe t1
-      | perRun b = do
-          ts <- replicateM (numInit - 1) (measure' 1 b)
-          pure $ Just $ initAgg (t1:ts)
-      | otherwise = pure Nothing
+      warnOnTooLongBenchmark cfgTimeout sum_of_ts' t2
 
-    go :: Word64 -> Measurement -> Word64 -> Maybe Aggregate -> IO Estimate
-    go n t1 sumOfTs mb_agg = do
-      let n' | perRun b = 1
-             | otherwise = 2 * n
-          scale = (`quot` n)
-          sumOfTs' = sumOfTs + measTime t1
+      if is_stdev_in_target_range || is_timeout_soon
+        then pure $ summarize r t2 est
+        else go sum_of_ts' (updateForNextRun r t2 est)
+    {-# SPECIALIZE go :: Word64 -> Batch -> IO Summary #-}
+    {-# SPECIALIZE go :: Word64 -> Single-> IO Summary #-}
 
-      t2 <- measure' n' b
+-- XXX: Return the end time from measure, compare with t0. Then,
+-- replace sum_of_ts.
+timeoutSoon :: Timeout -> Word64 -> Bool
+timeoutSoon NoTimeout _ = False
+timeoutSoon (Timeout micros) sum_of_ts = micros <= sum_of_ts `quot` divis
+  where
+    divis = 1000000 * 10 `quot` 12
+{-# INLINABLE timeoutSoon #-}
 
-      let Estimate (Measurement meanN allocN copiedN maxMemN) stdevN =
-            case mb_agg of
-              Nothing  -> predictPerturbed t1 t2
-              Just agg -> aggToEstimate t1 t2 agg
-          isTimeoutSoon =
-            case cfgTimeout of
-              NoTimeout -> False
-              Timeout us ->
-                let extra | perRun b = (3 + numInit) * meanN
-                          | otherwise = 3 * measTime t2
-                    divis = 1000000 * 10 `quot` 12
-                in  (sumOfTs' + extra) `quot` divis >= fromIntegral us
-          isStDevInTargetRange =
-            stdevN < truncate (cfgRelStDev * word64ToDouble meanN)
-          meas = Measurement (scale meanN) (scale allocN) (scale copiedN) maxMemN
-          mb_agg' = updateAgg (measTime t2) <$> mb_agg
+warnOnTooLongBenchmark :: Timeout -> Word64 -> Measurement -> IO ()
+warnOnTooLongBenchmark tout sum_of_ts meas =
+  case tout of
+    NoTimeout | sum_of_ts + measTime meas > 100 * 1000000000000 ->
+      hPutStrLn stderr $
+                "\n" ++
+                "This benchmark takes more than 100 seconds.\n" ++
+                "Conosider setting --time-limit, if this is\n" ++
+                "unexpected (or to silence this warning)."
+    _ -> pure ()
+{-# INLINABLE warnOnTooLongBenchmark #-}
 
-      case cfgTimeout of
-        NoTimeout | sumOfTs' + measTime t2 > 100 * 1000000000000 ->
-          hPutStrLn stderr $
-                    "\n" ++
-                    "This benchmark takes more than 100 seconds.\n" ++
-                    "Conosider setting --time-limit, if this is\n" ++
-                    "unexpected (or to silence this warning)."
-        _ -> pure ()
 
-      if isStDevInTargetRange || isTimeoutSoon
-        then pure $ Estimate {estMean = meas, estStdev = scale stdevN}
-        else go n' t2 sumOfTs' mb_agg'
+-- ------------------------------------------------------------------------
+-- Runner, the internal interface for measureUntil
+-- ------------------------------------------------------------------------
+
+class Runner r where
+  numRepeats :: r -> Word64
+  previousMeasurement :: r -> Measurement
+  computeEstimate :: r -> Measurement -> Measurement -> Estimate
+  timeoutExtra :: r -> Measurement -> Word64
+  summarize :: r -> Measurement -> Estimate -> Summary
+  updateForNextRun :: r -> Measurement -> Estimate -> r
+
+
+-- ------------------------------------------------------------------------
+-- Batch runner
+-- ------------------------------------------------------------------------
+
+data Batch = Batch
+  { btPreviousNumRepeats  :: !Word64
+  , btPreviousMeasurement :: !Measurement
+  , btNumRepeats          :: !Word64
+  , btMeanMinMax          :: !MinMax
+  , btQueue               :: !(Queue Word64)
+  }
+
+initializeBatch :: Config -> Benchmarkable -> IO (Word64, Batch)
+initializeBatch cfg b = do
+  debugStr cfg "*** Starting initialization\n"
+  go 0 1
+  where
+    threshold =
+      max (fromInteger cpuTimePrecision) oneMillisecond * 30
+    go sum_of_ts n = do
+      meas@(Measurement t _ _ _) <- measure cfg n b
+      if t < threshold
+        -- Discarding Measurement data when the total duration is
+        -- shorter than threshold. Too short measurement is considered
+        -- imprecise and unreliable.
+        then go (sum_of_ts + t) (n * 2)
+        else do
+          debugStr cfg "*** Initialization done\n"
+          let t_scaled = t `quot` n
+          pure ( sum_of_ts
+               , Batch { btPreviousNumRepeats = n
+                       , btPreviousMeasurement = meas
+                       , btNumRepeats = 2 * n
+                       , btMeanMinMax = toMinMax t_scaled
+                       , btQueue = enqueue t_scaled defaultQueue
+                       })
+
+instance Runner Batch where
+  numRepeats = btNumRepeats
+  {-# INLINE numRepeats #-}
+
+  previousMeasurement = btPreviousMeasurement
+  {-# INLINE previousMeasurement #-}
+
+  computeEstimate _bt t1 t2 = predictPerturbed t1 t2
+  {-# INLINE computeEstimate #-}
+
+  timeoutExtra _bt m = 3 * measTime m
+  {-# INLINE timeoutExtra #-}
+
+  summarize bt t2 (Estimate measN _stdevN) =
+    let Measurement meanN allocN copiedN maxMemN = measN
+        mean_scaled = scale meanN
+        meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
+        scale = (`quot` btPreviousNumRepeats bt)
+        mean_t2 = measTime t2 `quot` btNumRepeats bt
+        mean_mm = btMeanMinMax bt <> toMinMax mean_t2
+        t1 = btPreviousMeasurement bt
+        stdevs = map scale (predictStdevs t1 t2)
+        stdev = sum stdevs `quot` 4
+        queue = enqueue mean_t2 (btQueue bt)
+        -- The queue contains scaled measurement values, each value is
+        -- computed from twice the number of repeats than the previous
+        -- value.
+        (ys, ns) = (toList queue, iterate (* 2) 1)
+        ys_and_ns = zipWith (\y n -> (fromIntegral y * n, n)) ys ns
+    in  Summary { smEstimate = Estimate meas stdev
+                , smMean = Ranged (mmMin mean_mm) mean_scaled (mmMax mean_mm)
+                , smStdev = Ranged (minimum stdevs) stdev (maximum stdevs)
+                , smMedian = computeMedian queue
+                , smRSquared = computeRSquared mean_scaled mean_mm ys_and_ns
+                }
+  {-# INLINE summarize #-}
+
+  updateForNextRun bt t2 _est =
+    let mean = measTime t2 `quot` btNumRepeats bt
+    in  bt { btPreviousNumRepeats = btNumRepeats bt
+           , btPreviousMeasurement = t2
+           , btNumRepeats = btNumRepeats bt * 2
+           , btMeanMinMax = btMeanMinMax bt <> toMinMax mean
+           , btQueue = enqueue mean (btQueue bt)
+           }
+  {-# INLINE updateForNextRun #-}
+
+
+-- ------------------------------------------------------------------------
+-- One-by-one runner
+-- ------------------------------------------------------------------------
+
+data Single = Single
+  { snAggregate           :: !Aggregate
+  , snMeanMinMax          :: !MinMax
+  , snStdevMinMax         :: !MinMax
+  , snPreviousMeasurement :: !Measurement
+  , snQueue               :: !(Queue Word64)
+  }
+
+initializeSingle :: Config -> Benchmarkable -> IO (Word64, Single)
+initializeSingle cfg b = do
+  t1 <- measure cfg 1 b
+  t2 <- measure cfg 1 b
+  let ts = [t1, t2]
+      agg = initAgg ts
+      mean_mm = toMinMax (measTime t1) <> toMinMax (measTime t2)
+      stdev = estStdev (aggToEstimate t1 t2 agg)
+      stdev_mm = toMinMax stdev
+  pure ( measTime t1 + measTime t2
+       , Single { snAggregate = agg
+                , snMeanMinMax = mean_mm
+                , snStdevMinMax = stdev_mm
+                , snPreviousMeasurement = t2
+                , snQueue = enqueue (measTime t2)
+                            (enqueue (measTime t1) defaultQueue)
+                })
+
+instance Runner Single where
+  numRepeats _sn = 1
+  {-# INLINE numRepeats #-}
+
+  previousMeasurement = snPreviousMeasurement
+  {-# INLINE previousMeasurement #-}
+
+  computeEstimate sn t1 t2 = aggToEstimate t1 t2 (snAggregate sn)
+  {-# INLINE computeEstimate #-}
+
+  timeoutExtra _sn m = max (10 * measTime m) (250 * oneMillisecond)
+  {-# INLINE timeoutExtra #-}
+
+  summarize sn t2 est =
+    let mean_t2 = measTime t2
+        mean_mm = snMeanMinMax sn <> toMinMax mean_t2
+        mean_est = measTime (estMean est)
+        queue = enqueue mean_t2 (snQueue sn)
+        stdev = estStdev est
+        stdev_mm = snStdevMinMax sn
+        -- Adding up measured time to compare with constantly
+        -- increasing sequence.
+        (ys, ns) = (scanl1 (+) (toList queue), [1,2..])
+        ys_and_ns = zipWith (\y n -> (fromIntegral y, n)) ys ns
+    in  Summary { smEstimate = est
+                , smMean = fitInRange (mmMin mean_mm) mean_est (mmMax mean_mm)
+                , smStdev = fitInRange (mmMin stdev_mm) stdev (mmMax stdev_mm)
+                , smMedian = computeMedian queue
+                , smRSquared = computeRSquared mean_est mean_mm ys_and_ns
+                }
+  {-# INLINE summarize #-}
+
+  updateForNextRun sn m est =
+    let mean = measTime m
+        stdev = estStdev est
+    in  sn { snAggregate = updateAgg mean (snAggregate sn)
+           , snMeanMinMax = snMeanMinMax sn <> toMinMax mean
+           , snStdevMinMax = snStdevMinMax sn <> toMinMax stdev
+           , snPreviousMeasurement = m
+           , snQueue = enqueue mean (snQueue sn)
+           }
+  {-# INLINE updateForNextRun #-}
 
 
 -- ------------------------------------------------------------------------
@@ -1176,6 +1414,7 @@ aggToEstimate (Measurement _ a1 c1 m1) (Measurement _ a2 c2 m2) agg = est
     avg a b = (a + b) `quot` 2
     stdev = truncate (sqrt (aggM2 agg / word64ToDouble (aggCount agg - 1)))
     am' = truncate (aggMean agg)
+{-# INLINABLE aggToEstimate #-}
 
 -- Welford's online algorithm, see:
 --
@@ -1190,6 +1429,7 @@ updateAgg t (Aggregate n am am2) = Aggregate n' am' am2'
     delta = t' - am
     delta2 = t' - am'
     t' = word64ToDouble t
+{-# INLINABLE updateAgg #-}
 
 initAgg :: [Measurement] -> Aggregate
 initAgg ms = Aggregate {aggCount = n, aggMean = mean0, aggM2 = m20}
@@ -1199,6 +1439,125 @@ initAgg ms = Aggregate {aggCount = n, aggMean = mean0, aggM2 = m20}
     mean0 = word64ToDouble (foldr ((+) . measTime) 0 ms) / n
     m20 = foldr ((+) . sqrdiff) 0 ms / (n - 1)
     sqrdiff t = sqr (mean0 - word64ToDouble (measTime t))
+
+
+-- ------------------------------------------------------------------------
+-- Ordered values
+-- ------------------------------------------------------------------------
+
+-- | A value in a range.
+data Ranged a = Ranged {irLo :: !a, irMid :: !a, irHi :: !a}
+
+-- | Order the given three values to construct a range.
+fitInRange :: Ord a => a -> a -> a -> Ranged a
+fitInRange a b c
+  | a <= b, b <= c = Ranged a b c
+  | a <= c, c <= b = Ranged a c b
+  | b <= a, a <= c = Ranged b a c
+  | b <= c, c <= a = Ranged b c a
+  | c <= a, a <= b = Ranged c a b
+  | otherwise      = Ranged c b a
+{-# INLINABLE fitInRange #-}
+
+-- | Ranged value with identical lo, high, and the body values.
+toRanged :: a -> Ranged a
+toRanged x = Ranged x x x
+{-# INLINE toRanged #-}
+
+-- | Data type to compare values and to hold minimum and maximum at once.
+data MinMax = MinMax
+  { mmMin :: {-# UNPACK #-} !Word64
+  , mmMax :: {-# UNPACK #-} !Word64
+  }
+
+instance Semigroup MinMax where
+  MinMax min1 max1 <> MinMax min2 max2 = MinMax (min min1 min2) (max max1 max2)
+  {-# INLINE (<>) #-}
+
+toMinMax :: Word64 -> MinMax
+toMinMax w = MinMax w w
+{-# INLINE toMinMax #-}
+
+
+-- ------------------------------------------------------------------------
+-- Median and R² computed from last k elements
+-- ------------------------------------------------------------------------
+
+-- Median and R² are computed from last @k@ measurements (or less if
+-- the benchmark terminate earlier). Currently the value of k is hard
+-- coded to 63.
+
+-- | Get the median value from given queue.
+computeMedian :: Queue Word64 -> Median
+computeMedian q@(Queue _ size _ _) = Ranged lo mid hi
+  where
+    xs = sort (toList q)
+    (lo, mid, hi)
+      | size < 3, x:_ <- xs = (x,x,x)
+      | otherwise = let i = fromIntegral (size `div` 2)
+                    in (xs!!(i-1), xs!!i, xs!!(i+1))
+{-# INLINABLE computeMedian #-}
+
+-- | Compute coefficient of determination from means and a list of
+-- (x,y) pairs. Regression function is simply @f(x) = ax + b@ where @b
+-- = 0@ and @a@ is the mean values.
+computeRSquared :: Word64 -> MinMax -> [(Double, Double)]  -> RSquared
+computeRSquared expected MinMax{..} ys_and_xs =
+  let (ys, xs) = unzip ys_and_xs
+      f e x = fromIntegral e * x
+      y_bar = sum ys / sum xs
+      sse e = sum [sqr (yi - f e x) | (yi, x) <- ys_and_xs]
+      sst = sum [sqr (yi - y_bar) | yi <- ys]
+      rsq e = 1 - (sse e / sst)
+  in  fitInRange (rsq expected) (rsq mmMin) (rsq mmMax)
+{-# INLINABLE computeRSquared #-}
+
+
+-- ------------------------------------------------------------------------
+-- Size limited queue
+-- ------------------------------------------------------------------------
+
+-- | Size limited queue, to support FIFO operations.
+--
+-- When the number of elements reaches to the limit, the first element
+-- will be removed.
+data Queue a = Queue
+  {-# UNPACK #-} !Word -- ^ Maximum size
+  {-# UNPACK #-} !Word -- ^ Current size
+  [a] -- ^ Front elements
+  [a] -- ^ Rear elements in reversed order
+
+-- | Empty queue with maximum 63 elements.
+defaultQueue :: Queue a
+defaultQueue = emptyQueue 63
+{-# INLINABLE defaultQueue #-}
+
+emptyQueue :: Word -> Queue a
+emptyQueue max_size = Queue max_size 0 [] []
+{-# INLINABLE emptyQueue #-}
+
+-- | Add new element to the last of queue. If the queue is full,
+-- remove the first element.
+enqueue :: a -> Queue a -> Queue a
+enqueue y q@(Queue max_size n xs ys)
+  | n < max_size = Queue max_size (n+1) xs (y:ys)
+  | Just (_, Queue _ _ xs' ys') <- dequeue q = Queue max_size n xs' (y:ys')
+  | otherwise = error "enqueue: internal error"
+{-# INLINABLE enqueue #-}
+
+-- | 'Just' the first element of the queue and the rest, or 'Nothing'.
+dequeue :: Queue a -> Maybe (a, Queue a)
+dequeue q = case q of
+  Queue _ _ [] []            -> Nothing
+  Queue max_size n (x:xs) ys -> Just (x, Queue max_size (n-1) xs ys)
+  Queue max_size n [] ys     -> dequeue (Queue max_size n (reverse ys) [])
+{-# INLINABLE dequeue #-}
+
+-- | Convert queue to list. The first element of the queue is the head
+-- of the list.
+toList :: Queue a -> [a]
+toList = unfoldr dequeue
+{-# INLINABLE toList #-}
 
 
 -- ------------------------------------------------------------------------

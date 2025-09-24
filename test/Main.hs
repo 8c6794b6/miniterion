@@ -43,6 +43,8 @@ main = Test.Tasty.defaultMain $
 #ifdef DEV
   , formatPicos
   , formatBytes
+  , ranged
+  , sizeLimitedQueue
 #endif
   ]
 
@@ -440,6 +442,50 @@ formatBytes = testGroup "format bytes"
   ]
   where
     assertBytes n str = assertEqual (show n) str (showBytes n)
+
+ranged :: TestTree
+ranged = testGroup "ranged values"
+  [ testCase "fit a < b < c" $ assertRanged 1 2 3
+  , testCase "fit a < c < b" $ assertRanged 1 3 2
+  , testCase "fit b < a < c" $ assertRanged 2 1 3
+  , testCase "fit b < c < a" $ assertRanged 3 1 2
+  , testCase "fit c < a < b" $ assertRanged 2 3 1
+  , testCase "fit c < b < a" $ assertRanged 3 2 1
+  ]
+  where
+    assertRanged :: Int -> Int -> Int -> Assertion
+    assertRanged a b c = do
+      let r = fitInRange a b c
+          abc = [a,b,c]
+          min_abc = minimum abc
+          max_abc = maximum abc
+      assertEqual "irLo" (irLo r) min_abc
+      assertEqual "irMid" (irMid r) $
+        case filter (\x -> x /= min_abc && x /= max_abc) abc of
+          x:_ -> x
+          _   -> error "assertRanged: duplicated value"
+      assertEqual "irHi" (irHi r) max_abc
+
+sizeLimitedQueue :: TestTree
+sizeLimitedQueue = testGroup "size limited queue"
+  [ testCase "first in first out" $ do
+      let x = 12345 :: Int
+          q = enqueue 3 (enqueue 2 (enqueue x defaultQueue))
+      Just (popped, _) <- pure (dequeue q)
+      assertEqual "first element" x popped
+
+  , testCase "size is limited" $ do
+      let q = foldr enqueue defaultQueue [1..100::Int]
+          xs = toList q
+          Queue max_size _ _ _ = q
+      assertEqual "size of queue" (fromIntegral max_size) (length xs)
+
+  , testCase "pop from over-sized queue" $ do
+      let Queue max_size _ _ _ = defaultQueue
+          q = foldl' (flip enqueue) defaultQueue [1,2..(max_size + 1)]
+      Just (popped,_) <- pure (dequeue q)
+      assertEqual "second element" 2 popped
+  ]
 #endif
 
 
@@ -455,7 +501,7 @@ defaultMainWith args = quietly . withArgs args' . Miniterion.defaultMain
   where
 #if linux_HOST_OS
     -- Running the tests in CI for other os than Linux is slow, using
-    -- higher value for stdev to speed.
+    -- higher value for stdev to make it faster to terminate.
     args' = args
 #else
     args' = "--stdev=20" : args
