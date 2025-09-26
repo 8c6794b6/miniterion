@@ -1203,12 +1203,11 @@ measureUntil cfg@Config{..} b
   where
     go_with initializer = do
       t_start <- getTimePicoSecs cfgTimeMode
-      runner <- initializer cfg b
-      go t_start runner
+      (m0, runner) <- initializer cfg b
+      go t_start m0 runner
 
-    go :: Runner r => Word64 -> r -> IO Summary
-    go t_start r = do
-      let m1 = previousMeasurement r
+    go :: Runner r => Word64 -> Measurement -> r -> IO Summary
+    go t_start m1 r = do
       (m2, t_end) <- measureAndEndTime cfg (numRepeats r) b
 
       let est@(Estimate measN stdevN) = computeEstimate r m1 m2
@@ -1221,10 +1220,10 @@ measureUntil cfg@Config{..} b
       warnOnTooLongBenchmark cfgTimeout t_start t_end
 
       if is_stdev_in_target_range || is_timeout_soon
-        then pure $ summarize r m2 est
-        else go t_start (updateForNextRun r m2 est)
-    {-# SPECIALIZE go :: Word64 -> Batch -> IO Summary #-}
-    {-# SPECIALIZE go :: Word64 -> Single -> IO Summary #-}
+        then pure $ summarize r m1 m2 est
+        else go t_start m2 (updateForNextRun r m2 est)
+    {-# SPECIALIZE go :: Word64 -> Measurement -> Batch -> IO Summary #-}
+    {-# SPECIALIZE go :: Word64 -> Measurement -> Single -> IO Summary #-}
 
 timeoutSoon :: Timeout -> Word64 -> Word64 -> Bool
 timeoutSoon tout t_start t_end_of_next_run =
@@ -1252,10 +1251,9 @@ warnOnTooLongBenchmark tout t_start t_now =
 
 class Runner r where
   numRepeats :: r -> Word64
-  previousMeasurement :: r -> Measurement
   computeEstimate :: r -> Measurement -> Measurement -> Estimate
   timeoutExtra :: r -> Measurement -> Word64
-  summarize :: r -> Measurement -> Estimate -> Summary
+  summarize :: r -> Measurement -> Measurement -> Estimate -> Summary
   updateForNextRun :: r -> Measurement -> Estimate -> r
 
 
@@ -1264,14 +1262,13 @@ class Runner r where
 -- ------------------------------------------------------------------------
 
 data Batch = Batch
-  { btPreviousNumRepeats  :: !Word64
-  , btPreviousMeasurement :: !Measurement
-  , btNumRepeats          :: !Word64
-  , btMeanMinMax          :: !MinMax
-  , btQueue               :: !(Queue Word64)
+  { btPreviousNumRepeats :: !Word64
+  , btNumRepeats         :: !Word64
+  , btMeanMinMax         :: !MinMax
+  , btQueue              :: !(Queue Word64)
   }
 
-initializeBatch :: Config -> Benchmarkable -> IO Batch
+initializeBatch :: Config -> Benchmarkable -> IO (Measurement, Batch)
 initializeBatch cfg b = do
   debugStr cfg "*** Starting initialization\n"
   go 1
@@ -1288,37 +1285,33 @@ initializeBatch cfg b = do
         else do
           debugStr cfg "*** Initialization done\n"
           let t_scaled = t `quot` n
-          pure Batch { btPreviousNumRepeats = n
-                     , btPreviousMeasurement = meas
-                     , btNumRepeats = 2 * n
-                     , btMeanMinMax = toMinMax t_scaled
-                     , btQueue = enqueue t_scaled defaultQueue
-                     }
+          pure ( meas
+               , Batch { btPreviousNumRepeats = n
+                       , btNumRepeats = 2 * n
+                       , btMeanMinMax = toMinMax t_scaled
+                       , btQueue = enqueue t_scaled defaultQueue
+                       })
 
 instance Runner Batch where
   numRepeats = btNumRepeats
   {-# INLINE numRepeats #-}
 
-  previousMeasurement = btPreviousMeasurement
-  {-# INLINE previousMeasurement #-}
-
-  computeEstimate _bt t1 t2 = predictPerturbed t1 t2
+  computeEstimate _bt m1 m2 = predictPerturbed m1 m2
   {-# INLINE computeEstimate #-}
 
   timeoutExtra _bt m = 2 * measTime m + (30 * oneMillisecond)
   {-# INLINE timeoutExtra #-}
 
-  summarize bt t2 (Estimate measN _stdevN) =
+  summarize bt m1 m2 (Estimate measN _stdevN) =
     let Measurement meanN allocN copiedN maxMemN = measN
         mean_scaled = scale meanN
         meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
         scale = (`quot` btPreviousNumRepeats bt)
-        mean_t2 = measTime t2 `quot` btNumRepeats bt
-        mean_mm = btMeanMinMax bt <> toMinMax mean_t2
-        t1 = btPreviousMeasurement bt
-        stdevs = map scale (predictStdevs t1 t2)
+        mean_m2 = measTime m2 `quot` btNumRepeats bt
+        mean_mm = btMeanMinMax bt <> toMinMax mean_m2
+        stdevs = map scale (predictStdevs m1 m2)
         stdev = sum stdevs `quot` 4
-        queue = enqueue mean_t2 (btQueue bt)
+        queue = enqueue mean_m2 (btQueue bt)
         -- The queue contains scaled measurement values, each value is
         -- computed from twice the number of repeats than the previous
         -- value.
@@ -1335,7 +1328,6 @@ instance Runner Batch where
   updateForNextRun bt t2 _est =
     let mean = measTime t2 `quot` btNumRepeats bt
     in  bt { btPreviousNumRepeats = btNumRepeats bt
-           , btPreviousMeasurement = t2
            , btNumRepeats = btNumRepeats bt * 2
            , btMeanMinMax = btMeanMinMax bt <> toMinMax mean
            , btQueue = enqueue mean (btQueue bt)
@@ -1348,14 +1340,13 @@ instance Runner Batch where
 -- ------------------------------------------------------------------------
 
 data Single = Single
-  { snAggregate           :: !Aggregate
-  , snMeanMinMax          :: !MinMax
-  , snStdevMinMax         :: !MinMax
-  , snPreviousMeasurement :: !Measurement
-  , snQueue               :: !(Queue Word64)
+  { snAggregate   :: !Aggregate
+  , snMeanMinMax  :: !MinMax
+  , snStdevMinMax :: !MinMax
+  , snQueue       :: !(Queue Word64)
   }
 
-initializeSingle :: Config -> Benchmarkable -> IO Single
+initializeSingle :: Config -> Benchmarkable -> IO (Measurement, Single)
 initializeSingle cfg b = do
   m1 <- measure cfg 1 b
   m2 <- measure cfg 1 b
@@ -1364,32 +1355,29 @@ initializeSingle cfg b = do
       mean_mm = toMinMax (measTime m1) <> toMinMax (measTime m2)
       stdev = estStdev (aggToEstimate m1 m2 agg)
       stdev_mm = toMinMax stdev
-  pure Single { snAggregate = agg
-              , snMeanMinMax = mean_mm
-              , snStdevMinMax = stdev_mm
-              , snPreviousMeasurement = m2
-              , snQueue = enqueue (measTime m2)
-                          (enqueue (measTime m1) defaultQueue)
-              }
+  pure ( m1
+       , Single { snAggregate = agg
+                , snMeanMinMax = mean_mm
+                , snStdevMinMax = stdev_mm
+                , snQueue = enqueue (measTime m2)
+                            (enqueue (measTime m1) defaultQueue)
+                })
 
 instance Runner Single where
   numRepeats _sn = 1
   {-# INLINE numRepeats #-}
 
-  previousMeasurement = snPreviousMeasurement
-  {-# INLINE previousMeasurement #-}
-
-  computeEstimate sn t1 t2 = aggToEstimate t1 t2 (snAggregate sn)
+  computeEstimate sn m1 m2 = aggToEstimate m1 m2 (snAggregate sn)
   {-# INLINE computeEstimate #-}
 
   timeoutExtra _sn m = max (10 * measTime m) (30 * oneMillisecond)
   {-# INLINE timeoutExtra #-}
 
-  summarize sn t2 est =
-    let mean_t2 = measTime t2
-        mean_mm = snMeanMinMax sn <> toMinMax mean_t2
+  summarize sn _m1 m2 est =
+    let mean_m2 = measTime m2
+        mean_mm = snMeanMinMax sn <> toMinMax mean_m2
         mean_est = measTime (estMean est)
-        queue = enqueue mean_t2 (snQueue sn)
+        queue = enqueue mean_m2 (snQueue sn)
         stdev = estStdev est
         stdev_mm = snStdevMinMax sn
         -- Adding up measured time to compare with constantly
@@ -1410,7 +1398,6 @@ instance Runner Single where
     in  sn { snAggregate = updateAgg mean (snAggregate sn)
            , snMeanMinMax = snMeanMinMax sn <> toMinMax mean
            , snStdevMinMax = snStdevMinMax sn <> toMinMax stdev
-           , snPreviousMeasurement = m
            , snQueue = enqueue mean (snQueue sn)
            }
   {-# INLINE updateForNextRun #-}
