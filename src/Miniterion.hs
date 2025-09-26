@@ -1191,16 +1191,12 @@ measureAndEndTime cfg n Benchmarkable{..} =
 
 measureUntil :: Config -> Benchmarkable -> IO Summary
 measureUntil cfg@Config{..} b
-  | isInfinite cfgRelStDev && cfgRelStDev > 0 = do
-      meas@(Measurement t _ _ _) <- measure cfg 1 b
-      let med = toRanged t
-          rsq = toRanged 0
-          stdev = toRanged 0
-          mean = toRanged t
-      pure (Summary (Estimate meas 0) mean stdev med rsq)
+  | is_once = fmap measToSummary (measure cfg 1 b)
   | perRun b = go_with initializeSingle
   | otherwise = go_with initializeBatch
   where
+    is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
+
     go_with initializer = do
       t_start <- getTimePicoSecs cfgTimeMode
       (m0, runner) <- initializer cfg b
@@ -1224,6 +1220,16 @@ measureUntil cfg@Config{..} b
         else go t_start m2 (updateForNextRun r m2 est)
     {-# SPECIALIZE go :: Word64 -> Measurement -> Batch -> IO Summary #-}
     {-# SPECIALIZE go :: Word64 -> Measurement -> Single -> IO Summary #-}
+
+measToSummary :: Measurement -> Summary
+measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq
+  where
+    est = Estimate m 0
+    mean = toRanged t
+    stdev = toRanged 0
+    med = toRanged t
+    rsq = toRanged 1
+{-# INLINABLE measToSummary #-}
 
 timeoutSoon :: Timeout -> Word64 -> Word64 -> Bool
 timeoutSoon tout t_start t_end_of_next_run =
