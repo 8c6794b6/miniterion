@@ -685,7 +685,7 @@ glob :: String -> String -> Bool
 glob pat0 = go pat0
   where
     go [] [] = True
-    go ('\\':p:ps) (c:cs) = p == c && go ps cs
+    go ('\\':p:ps) (c:cs) | p == c = go ps cs
     go ('?':ps) (_:cs) = go ps cs
     go ['*'] _ = True
     go ('*':ps) cs = any (go ps) (cs : tails cs)
@@ -695,16 +695,16 @@ glob pat0 = go pat0
     go (p:ps) (c:cs) | p == c = go ps cs
     go _ _ = False
 
-    cclass test c ps cs =
-      let lp close acc xs =
-            case xs of
-              []              -> throw (GlobUnbalancedBracket pat0)
-              '\\':x:xs'      -> lp True (x:acc) xs'
-              ']':xs' | close -> test c acc && go xs' cs
-              x0:'-':']':xs'  -> test c ('-':x0:acc) && go xs' cs
-              x0:'-':x1:xs'   -> lp True ([x0 .. x1] ++ acc) xs'
-              x:xs'           -> lp True (x:acc) xs'
-      in  lp False [] ps
+    cclass test c ps cs = lp False [] ps
+      where
+        lp close acc xs =
+          case xs of
+            []              -> throw (GlobUnbalancedBracket pat0)
+            '\\':x:xs'      -> lp True (x:acc) xs'
+            ']':xs' | close -> test c acc && go xs' cs
+            x0:'-':']':xs'  -> test c ('-':x0:acc) && go xs' cs
+            x0:'-':x1:xs'   -> lp True ([x0 .. x1] ++ acc) xs'
+            x:xs'           -> lp True (x:acc) xs'
 
     brace ps cs = any (\p -> go (p ++ ps') cs) pats
       where
