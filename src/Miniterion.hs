@@ -368,13 +368,13 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
         baseline <- maybe mempty readBaseline (cfgBaselinePath cfg)
         rs <- runBenchmark (cfg {cfgBaselineSet = baseline}) root_bs
         summariseResults rs
-  case () of
-    _ | cfgHelp cfg2        -> showHelp
-      | cfgVersion cfg2     -> putStrLn builtWithMiniterion
-      | cfgList cfg2        -> showNames cfg2 root_bs
-      | not (null errs)     -> errorOptions errs
-      | not (null invalids) -> invalidOptions invalids
-      | otherwise           -> do_bench
+  case cfgRunMode cfg2 of
+    Help    -> showHelp
+    Version -> putStrLn builtWithMiniterion
+    DoList  -> showNames cfg2 root_bs
+    DoBench | not (null errs)     -> errorOptions errs
+            | not (null invalids) -> invalidOptions invalids
+            | otherwise           -> do_bench
 
 showHelp :: IO ()
 showHelp = do
@@ -838,10 +838,8 @@ encodeCsv xs
 -- ------------------------------------------------------------------------
 
 data Config = Config
-  { cfgHelp         :: Bool
-    -- ^ True when showing help message.
-  , cfgList         :: Bool
-    -- ^ True when showing benchmark names.
+  { cfgRunMode      :: RunMode
+    -- ^ Mode to run the main program.
   , cfgBaselinePath :: Maybe FilePath
     -- ^ Path to a file containing baseline data, usually a CSV file
     -- made with @--csv@ option in advance.
@@ -868,14 +866,17 @@ data Config = Config
     -- ^ Timeout duration in seconds.
   , cfgVerbosity    :: Int
     -- ^ Verbosity level.
-  , cfgVersion      :: Bool
-    -- ^ True when showing version info.
   }
+
+data RunMode
+  = Help    -- ^ Show help message.
+  | Version -- ^ Show version info.
+  | DoList  -- ^ Show benchmark names.
+  | DoBench -- ^ Run benchmarks.
 
 defaultConfig :: Config
 defaultConfig = Config
-  { cfgHelp = False
-  , cfgList = False
+  { cfgRunMode = DoBench
   , cfgBaselinePath = Nothing
   , cfgBaselineSet = mempty
   , cfgCsvPath = Nothing
@@ -888,13 +889,12 @@ defaultConfig = Config
   , cfgTimeMode = CpuTime
   , cfgTimeout = NoTimeout
   , cfgVerbosity = 1
-  , cfgVersion = False
   }
 
 options :: [OptDescr (Config -> Config)]
 options =
   [ Option ['h'] ["help"]
-    (NoArg (\o -> o {cfgHelp = True}))
+    (NoArg (\o -> o {cfgRunMode = Help}))
     "Show this help text"
 
   , Option ['L'] ["time-limit"]
@@ -977,11 +977,11 @@ options =
      ,"\"pattern\" (substring), or \"ipattern\")"])
 
   , Option ['l'] ["list"]
-    (NoArg (\o -> o {cfgList = True}))
+    (NoArg (\o -> o {cfgRunMode = DoList}))
     "List benchmarks"
 
   , Option [] ["version"]
-    (NoArg (\o -> o {cfgVersion = True}))
+    (NoArg (\o -> o {cfgRunMode = Version}))
     "Show version info"
   ]
 
