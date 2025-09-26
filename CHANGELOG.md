@@ -6,11 +6,11 @@
 
 * Modify CSV format to follow the template used in Criterion.
 
-* Discared measurement results with its total duration shorter than
-  threshold when initializing batch benchmarks.
+* Discared measurement results when its total duration shorter than
+  threshold during batch benchmark initialization.
 
 * Modify time out detection to refer benchmark start and end time
-  instead of adding up measurement durations.
+  instead of sum of the measurement durations.
 
 * Modify output with ``-v2`` flag to show divided time.
 
