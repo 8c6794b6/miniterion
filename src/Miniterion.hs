@@ -679,8 +679,8 @@ isMatched Config{..} fullname = no_pat || has_match
 substring :: String -> String -> Bool
 substring pat = any (pat `isPrefixOf`) . tails
 
--- Simple, inefficient, and improper glob. Does not support special
--- character class names like `[:alnum:]', `[:digit:]', ... etc.
+-- | Simple, inefficient, and improper glob. Does not support special
+-- character class names like @[:alnum:]@, @[:digit:]@, ... etc.
 glob :: String -> String -> Bool
 glob pat0 = go pat0
   where
@@ -691,6 +691,7 @@ glob pat0 = go pat0
     go ('*':ps) cs = any (go ps) (cs : tails cs)
     go ('[':'!':ps) (c:cs) = cclass notElem c ps cs
     go ('[':ps) (c:cs) = cclass elem c ps cs
+    go ('{':ps) cs = brace ps cs
     go (p:ps) (c:cs) | p == c = go ps cs
     go _ _ = False
 
@@ -704,6 +705,19 @@ glob pat0 = go pat0
               x0:'-':x1:xs'   -> lp True ([x0 .. x1] ++ acc) xs'
               x:xs'           -> lp True (x:acc) xs'
       in  lp False [] ps
+
+    brace ps cs = any (\p -> go (p ++ ps') cs) pats
+      where
+        (pats, ps') = alts (0 :: Int) [] [] ps
+        alts depth tmp acc xs = case xs of
+          []         -> throw (GlobUnbalancedBrace pat0)
+          '\\':x:xs' -> alts depth (x:'\\':tmp) acc xs'
+          x:xs'      -> case x of
+            '}' | depth == 0 -> (reverse (reverse tmp : acc), xs')
+                | otherwise  -> alts (depth - 1) (x:tmp) acc xs'
+            '{'              -> alts (depth + 1) (x:tmp) acc xs'
+            ',' | depth == 0 -> alts depth [] (reverse tmp : acc) xs'
+            _other           -> alts depth (x:tmp) acc xs'
 
 
 -- ------------------------------------------------------------------------
@@ -987,6 +1001,7 @@ data MiniterionException
   | CannotReadFile (Maybe String) String
   | UninitializedEnv [String]
   | GlobUnbalancedBracket String
+  | GlobUnbalancedBrace String
   deriving (Show)
 
 instance Exception MiniterionException where
@@ -1004,6 +1019,8 @@ displayMiniterionException = \case
     "\nuse irrefutable pattern in the function taking the env."
   GlobUnbalancedBracket pat ->
     "unbalanced bracket in glob pattern `" ++ pat ++ "'"
+  GlobUnbalancedBrace pat ->
+    "unbalanced brace in glob pattern `" ++ pat ++ "'"
   where
     maybe_label = maybe "" (\lbl -> " for `--" ++ lbl ++ "'")
 

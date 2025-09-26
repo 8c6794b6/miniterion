@@ -289,8 +289,23 @@ glob = testGroup "glob"
   , testCase "char class `[!]a-]'" $
     glob_test "[!]a-]oo" "foo"
 
+  , testCase "brace without nesting 1" $
+    glob_test "foo{,d}" "foo"
+
+  , testCase "brace without nesting 2" $
+    glob_test "foo{,d}" "food"
+
+  , testCase "brace with nesting" $
+    glob_test "foo: {quux,buz{,z}/{,cat,dog}}/bar" "foo: buzz/dog/bar"
+
+  , testCase "brace with escape" $
+    glob_test "foo{,\\,} bar{,\\,} and buzz" "foo, bar, and buzz"
+
   , testCase "unbalanced bracket" $
     glob_test "[foo" "foo"
+
+  , testCase "unbalanced brace" $
+    glob_test "{bar" "bar"
   ]
   where
     glob_test pat str =
