@@ -338,7 +338,7 @@ whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
 -- | Run a benchmark interactively, providing an interface compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:benchmark benchmark>@.
 benchmark :: Benchmarkable -> IO ()
-benchmark = void . runBenchmark defaultConfig . bench "..."
+benchmark = void . runBenchmark defaultMEnv . bench "..."
 
 
 -- ------------------------------------------------------------------------
@@ -348,30 +348,16 @@ benchmark = void . runBenchmark defaultConfig . bench "..."
 defaultMainWith :: Config -> [Benchmark] -> IO ()
 defaultMainWith cfg0 bs = handleMiniterionException $ do
   args <- getArgs
-  let (opts, _pats, invalids, errs) = getOpt' order options args
-      order = ReturnInOrder $ \str o ->
-        o {cfgPatterns = (cfgMatch o, str) : cfgPatterns o}
+  let (opts, pats, invalids, errs) = getOpt' Permute options args
       cfg1 = foldl' (flip id) cfg0 opts
-      cfg2 = cfg1 {cfgPatterns = reverse (cfgPatterns cfg1)}
-      with_csv_cfg act =
-        case cfgCsvPath cfg2 of
-          Nothing -> act cfg2
-          Just path -> withFile path WriteMode $ \hdl -> do
-            hSetBuffering hdl LineBuffering
-            let extras | hasGCStats = ",Allocated,Copied,Peak Memory"
-                       | otherwise = ""
-                header = "Name,Mean,MeanLB,MeanUB,Stddev,StddevLB,StddevUB"
-            hPutStrLn hdl (header ++ extras)
-            act cfg2 {cfgCsvHandle = Just hdl}
+      menv0 = defaultMEnv {mePatterns = pats, meConfig = cfg1}
       root_bs = bgroup "" bs
-      do_bench = with_csv_cfg $ \cfg -> do
-        baseline <- maybe mempty readBaseline (cfgBaselinePath cfg)
-        rs <- runBenchmark (cfg {cfgBaselineSet = baseline}) root_bs
-        summariseResults rs
-  case cfgRunMode cfg2 of
+      do_bench = withCsvSettings menv0 $ \menv1 ->
+        runBenchmark menv1 root_bs >>= summariseResults
+  case cfgRunMode cfg1 of
     Help    -> showHelp
     Version -> putStrLn builtWithMiniterion
-    DoList  -> showNames cfg2 root_bs
+    DoList  -> showNames menv0 root_bs
     DoBench | not (null errs)     -> errorOptions errs
             | not (null invalids) -> invalidOptions invalids
             | otherwise           -> do_bench
@@ -413,8 +399,35 @@ exitWithOptions f opts = do
 briefUsageOf :: String -> String
 briefUsageOf me = "Try `" ++ me ++ " --help' for more information."
 
-showNames :: Config -> Benchmark -> IO ()
-showNames cfg = mapM_ (\n -> when (isMatched cfg n) (putStrLn n)) . benchNames []
+showNames :: MEnv -> Benchmark -> IO ()
+showNames menv = mapM_ (\n -> when (isMatched menv n) (putStrLn n)) . benchNames []
+
+
+-- ------------------------------------------------------------------------
+-- Miniterion's environment
+-- ------------------------------------------------------------------------
+
+-- | Internal environment for miniterion.
+data MEnv = MEnv
+  { meConfig      :: !Config
+    -- ^ Configuration of this environment.
+  , mePatterns    :: ![String]
+    -- ^ Patterns to filter running benchmarks
+  , meCsvHandle   :: !(Maybe Handle)
+    -- ^ File handle to write benchmark result in CSV format.
+  , meBaselineSet :: !Baseline
+    -- ^ Set containing baseline information, made from the file
+    -- specified by 'cfgBaselinePath'.
+  }
+
+-- | The default environment.
+defaultMEnv :: MEnv
+defaultMEnv = MEnv
+  { meCsvHandle = Nothing
+  , meBaselineSet = mempty
+  , mePatterns = []
+  , meConfig = defaultConfig
+  }
 
 
 -- ------------------------------------------------------------------------
@@ -462,21 +475,21 @@ failedNameAndReason = \case
 -- Running benchmarks
 -- ------------------------------------------------------------------------
 
-runBenchmark :: Config -> Benchmark -> IO [Result]
-runBenchmark cfg = go []
+runBenchmark :: MEnv -> Benchmark -> IO [Result]
+runBenchmark menv = go []
   where
     go acc0 bnch = case bnch of
-      Bench name act -> pure <$> runBenchmarkable cfg acc0 name act
+      Bench name act -> pure <$> runBenchmarkable menv acc0 name act
       Bgroup name bs ->
         let acc1 = consNonNull name acc0
-            to_run = filter (any (isMatched cfg) . benchNames acc1) bs
+            to_run = filter (any (isMatched menv) . benchNames acc1) bs
         in  concat <$> mapM (go acc1) to_run
       Environment alloc clean f ->
         let alloc' = alloc >>= \e -> evaluate (rnf e) >> pure e
         in  bracket alloc' clean (go acc0 . f)
 
-runBenchmarkable :: Config -> [String] -> String -> Benchmarkable -> IO Result
-runBenchmarkable cfg parents name b = do
+runBenchmarkable :: MEnv -> [String] -> String -> Benchmarkable -> IO Result
+runBenchmarkable menv@(MEnv {meConfig=cfg}) parents name b = do
   let fullname = pathToName parents name
 
   infoStr cfg (white "benchmarking " ++ boldCyan fullname ++ " ")
@@ -493,15 +506,12 @@ runBenchmarkable cfg parents name b = do
       (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary est _ _ _ _) ->
-          case compareVsBaseline (cfgBaselineSet cfg) fullname est of
+          case compareVsBaseline (meBaselineSet menv) fullname est of
             Nothing  -> (Done, Nothing)
             Just cmp -> (is_acceptable cmp, Just cmp)
-      csvname = encodeCsv fullname
-      put_csv_line hdl =
-        mapM_ (\e -> hPutStrLn hdl (csvname ++ "," ++ csvSummary e)) mb_sum
 
   infoStr cfg (formatResult result mb_sum mb_cmp)
-  mapM_ put_csv_line (cfgCsvHandle cfg)
+  mapM_ (putCsvLine fullname mb_sum) (meCsvHandle menv)
   pure result
 
 withTimeout :: Timeout -> IO a -> IO (Maybe a)
@@ -665,12 +675,12 @@ data MatchMode
   | IPattern -- ^ Case insensitive prefix match
   | Glob -- ^ Glob pattern match
 
-isMatched :: Config -> String -> Bool
-isMatched Config{..} fullname = no_pat || has_match
+isMatched :: MEnv -> String -> Bool
+isMatched MEnv{..} fullname = no_pat || has_match
   where
-    no_pat = null cfgPatterns
-    has_match = any is_match cfgPatterns
-    is_match (mode, str) = case mode of
+    no_pat = null mePatterns
+    has_match = any is_match mePatterns
+    is_match str = case cfgMatch meConfig of
       Glob     -> glob str fullname
       IPattern -> substring (map toLower str) (map toLower fullname)
       Pattern  -> substring str fullname
@@ -766,6 +776,25 @@ hasUnicodeSupport = False
 -- XXX: Could use `Data.Set.Set'.
 type Baseline = [String]
 
+withCsvSettings :: MEnv -> (MEnv -> IO a) -> IO a
+withCsvSettings menv0@MEnv{meConfig=cfg} act = do
+  baseline <- maybe mempty readBaseline (cfgBaselinePath cfg)
+  let menv1 = menv0 {meBaselineSet = baseline}
+  case cfgCsvPath cfg of
+    Nothing -> act menv1 {meCsvHandle = Nothing}
+    Just path -> withFile path WriteMode $ \hdl -> do
+      hSetBuffering hdl LineBuffering
+      let extras | hasGCStats = ",Allocated,Copied,Peak Memory"
+                 | otherwise = ""
+          header = "Name,Mean,MeanLB,MeanUB,Stddev,StddevLB,StddevUB"
+      hPutStrLn hdl (header ++ extras)
+      act menv1 {meCsvHandle = Just hdl}
+
+putCsvLine :: String -> Maybe Summary -> Handle -> IO ()
+putCsvLine name mb_summary hdl =
+  let put_line s = hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary s)
+  in  maybe (pure ()) put_line mb_summary
+
 csvSummary :: Summary -> String
 csvSummary (Summary (Estimate m _) mean stdev _med _)
   | hasGCStats = time ++ "," ++ gc
@@ -837,27 +866,21 @@ encodeCsv xs
 -- Configuration
 -- ------------------------------------------------------------------------
 
+-- | Data type to hold configuration information.
 data Config = Config
   { cfgRunMode      :: RunMode
     -- ^ Mode to run the main program.
   , cfgBaselinePath :: Maybe FilePath
     -- ^ Path to a file containing baseline data, usually a CSV file
     -- made with @--csv@ option in advance.
-  , cfgBaselineSet  :: Baseline
-    -- ^ Set containing baseline information, made from the file
-    -- specified by cfgBaselinePath.
   , cfgCsvPath      :: Maybe FilePath
     -- ^ Path to a file for writing results in CSV format.
-  , cfgCsvHandle    :: Maybe Handle
-    -- ^ File handle to write benchmark result in CSV format.
   , cfgFailIfFaster :: Double
     -- ^ Upper bound of acceptable speed up.
   , cfgFailIfSlower :: Double
     -- ^ Upper bound of acceptable slow down.
   , cfgMatch        :: MatchMode
     -- ^ Which mode to use for benchmark name pattern match.
-  , cfgPatterns     :: [(MatchMode,String)]
-    -- ^ Patterns to filter running benchmarks.
   , cfgRelStDev     :: Double
     -- ^ Relative standard deviation for measuring benchmarks.
   , cfgTimeMode     :: TimeMode
@@ -868,22 +891,21 @@ data Config = Config
     -- ^ Verbosity level.
   }
 
+-- | Mode to execute the main function.
 data RunMode
   = Help    -- ^ Show help message.
   | Version -- ^ Show version info.
   | DoList  -- ^ Show benchmark names.
   | DoBench -- ^ Run benchmarks.
 
+-- | Default configuration used for running benchmarks.
 defaultConfig :: Config
 defaultConfig = Config
   { cfgRunMode = DoBench
   , cfgBaselinePath = Nothing
-  , cfgBaselineSet = mempty
   , cfgCsvPath = Nothing
-  , cfgCsvHandle = Nothing
   , cfgFailIfFaster = 1.0 / 0.0
   , cfgFailIfSlower = 1.0 / 0.0
-  , cfgPatterns = []
   , cfgMatch = Prefix
   , cfgRelStDev = 0.05
   , cfgTimeMode = CpuTime
