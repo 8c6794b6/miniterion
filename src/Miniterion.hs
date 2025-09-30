@@ -1106,8 +1106,10 @@ hasGCStats = False
 -- ------------------------------------------------------------------------
 
 data Timeout
-  = Timeout !Word64 -- ^ number of microseconds (e.g., 200000)
+  = Timeout !Word64
+  -- ^ Duration in microseconds (e.g., 2000000 for 2 seconds).
   | NoTimeout
+  -- ^ Run without timeout.
 
 data Measurement = Measurement
   { measTime   :: {-# UNPACK #-} !Word64 -- ^ time in picoseconds
@@ -1284,7 +1286,6 @@ class Runner r where
   summarize :: r -> Measurement -> Measurement -> Estimate -> Summary
   updateForNextRun :: r -> Measurement -> Estimate -> r
 
-
 -- ------------------------------------------------------------------------
 -- Batch runner
 -- ------------------------------------------------------------------------
@@ -1324,7 +1325,7 @@ instance Runner Batch where
   numRepeats = btNumRepeats
   {-# INLINE numRepeats #-}
 
-  computeEstimate _bt m1 m2 = predictPerturbed m1 m2
+  computeEstimate _bt = predictPerturbed
   {-# INLINE computeEstimate #-}
 
   timeoutExtra _bt m = 2 * measTime m + (30 * oneMillisecond)
