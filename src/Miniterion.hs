@@ -1398,7 +1398,7 @@ instance Runner Single where
   computeEstimate sn m1 m2 = aggToEstimate m1 m2 (snAggregate sn)
   {-# INLINE computeEstimate #-}
 
-  timeoutExtra _sn m = max (10 * measTime m) (30 * oneMillisecond)
+  timeoutExtra _sn m = max (measTime m * 6 `quot` 5) (30 * oneMillisecond)
   {-# INLINE timeoutExtra #-}
 
   summarize sn _m1 m2 est =
