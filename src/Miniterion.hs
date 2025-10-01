@@ -590,8 +590,8 @@ formatResult res (Just summary) mb_cmp =
       white ("(" ++ showPicos5 lo ++ " .. " ++ showPicos5 hi ++ ")")
     rsq_str on_otherwise val = color (printf "%.3f R²" val)
       where
-        color | val < 0.6 = red
-              | val < 0.9 = yellow
+        color | val < 0.90 = red
+              | val < 0.99 = yellow
               | otherwise = on_otherwise
     show_minmax_rsq =
       white "(" ++ rsq_str white (irLo rsq) ++ white " .. " ++
