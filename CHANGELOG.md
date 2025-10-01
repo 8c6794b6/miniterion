@@ -12,6 +12,8 @@
 * Modify time out detection to refer benchmark start and end time
   instead of sum of the measurement durations.
 
+* Support brace expressions in glob.
+
 * Modify output with ``-v2`` flag to show divided time.
 
 * Perform minor GC after running target function to update RTSStats.
