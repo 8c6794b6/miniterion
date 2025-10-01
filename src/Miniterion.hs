@@ -76,7 +76,7 @@ module Miniterion
 import           Control.Exception     (Exception (..), SomeException (..),
                                         bracket, evaluate, handle, throw,
                                         throwIO)
-import           Control.Monad         (guard, void, when)
+import           Control.Monad         (guard, replicateM_, void, when)
 import           Data.Char             (toLower)
 import           Data.Foldable         (find)
 import           Data.Int              (Int64)
@@ -352,15 +352,16 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
       cfg1 = foldl' (flip id) cfg0 opts
       menv0 = defaultMEnv {mePatterns = pats, meConfig = cfg1}
       root_bs = bgroup "" bs
-      do_bench = withCsvSettings menv0 $ \menv1 ->
-        runBenchmark menv1 root_bs >>= summariseResults
+      do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
+      do_bench menv = runBenchmark menv root_bs >>= summariseResults
   case cfgRunMode cfg1 of
-    Help    -> showHelp
-    Version -> putStrLn builtWithMiniterion
-    DoList  -> showNames menv0 root_bs
-    DoBench | not (null errs)     -> errorOptions errs
-            | not (null invalids) -> invalidOptions invalids
-            | otherwise           -> do_bench
+    Help     -> showHelp
+    _         | not (null errs)     -> errorOptions errs
+              | not (null invalids) -> invalidOptions invalids
+    Version  -> putStrLn builtWithMiniterion
+    DoList   -> showNames menv0 root_bs
+    DoIter n -> do_iter n
+    DoBench  -> withCsvSettings menv0 do_bench
 
 showHelp :: IO ()
 showHelp = do
@@ -400,7 +401,8 @@ briefUsageOf :: String -> String
 briefUsageOf me = "Try `" ++ me ++ " --help' for more information."
 
 showNames :: MEnv -> Benchmark -> IO ()
-showNames menv = mapM_ (\n -> when (isMatched menv n) (putStrLn n)) . benchNames []
+showNames menv =
+  mapM_ (\n -> when (isMatched menv n) (putStrLn n)) . benchNames []
 
 
 -- ------------------------------------------------------------------------
@@ -476,10 +478,17 @@ failedNameAndReason = \case
 -- ------------------------------------------------------------------------
 
 runBenchmark :: MEnv -> Benchmark -> IO [Result]
-runBenchmark menv = go []
+runBenchmark = runBenchmarkWith runBenchmarkable
+
+iterBenchmark :: Word64 -> MEnv -> Benchmark -> IO [Result]
+iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
+
+runBenchmarkWith :: (MEnv -> [String] -> String -> Benchmarkable -> IO a)
+                 -> MEnv -> Benchmark -> IO [a]
+runBenchmarkWith run menv = go []
   where
     go acc0 bnch = case bnch of
-      Bench name act -> pure <$> runBenchmarkable menv acc0 name act
+      Bench name act -> pure <$> run menv acc0 name act
       Bgroup name bs ->
         let acc1 = consNonNull name acc0
             to_run = filter (any (isMatched menv) . benchNames acc1) bs
@@ -489,10 +498,10 @@ runBenchmark menv = go []
         in  bracket alloc' clean (go acc0 . f)
 
 runBenchmarkable :: MEnv -> [String] -> String -> Benchmarkable -> IO Result
-runBenchmarkable menv@(MEnv {meConfig=cfg}) parents name b = do
+runBenchmarkable menv@MEnv {meConfig=cfg} parents name b = do
   let fullname = pathToName parents name
 
-  infoStr cfg (white "benchmarking " ++ boldCyan fullname ++ " ")
+  infoBenchname cfg fullname
   debugStr cfg "\n"
   hFlush stdout
   mb_sum <- withTimeout (cfgTimeout cfg) (measureUntil cfg b)
@@ -514,6 +523,34 @@ runBenchmarkable menv@(MEnv {meConfig=cfg}) parents name b = do
   mapM_ (putCsvLine fullname mb_sum) (meCsvHandle menv)
   pure result
 
+iterBenchmarkable :: Word64 -> MEnv -> [String] -> String -> Benchmarkable
+                  -> IO Result
+iterBenchmarkable n MEnv{meConfig=cfg} parents name Benchmarkable{..} = do
+  let fullname = pathToName parents name
+      run i =
+        bracket (allocEnv i) (cleanEnv i) (\e -> runRepeatedly e i)
+      -- Repeating the `run 1' when the perRun field of the benchmark
+      -- is True, to initialize and cleanup the environment every
+      -- time.
+      go | perRun    = replicateM_ (fromIntegral n) (run 1)
+         | otherwise = run n
+
+  infoBenchname cfg fullname
+  hFlush stdout
+  mb_unit <- withTimeout (cfgTimeout cfg) go
+
+  case mb_unit of
+    Just () -> infoStr cfg "\n" >> pure Done
+    _ -> do
+      let result = TimedOut fullname
+      infoStr cfg (formatResult result Nothing Nothing)
+      pure result
+
+infoBenchname :: Config -> String -> IO ()
+infoBenchname cfg name =
+  infoStr cfg (white "benchmarking " ++ boldCyan name ++ " ")
+{-# INLINE infoBenchname #-}
+
 withTimeout :: Timeout -> IO a -> IO (Maybe a)
 withTimeout tout act = case tout of
   Timeout micro -> timeout (fromIntegral micro) act
@@ -528,12 +565,13 @@ benchNames = go
       Environment _ _ f -> go acc (f (throw (UninitializedEnv acc)))
 
 pathToName :: [String] -> String -> String
-pathToName prevs me = foldr (\a b -> a ++ "/" ++ b) me (reverse prevs)
+pathToName prevs me = foldl' (\b a -> a ++ "/" ++ b) me prevs
+{-# INLINABLE pathToName #-}
 
 groupsToName :: [String] -> String
 groupsToName = \case
-  []      -> ""
-  (hd:tl) -> pathToName tl hd
+  []    -> ""
+  hd:tl -> pathToName tl hd
 
 consNonNull :: String -> [String] -> [String]
 consNonNull x xs = if null x then xs else x : xs
@@ -893,10 +931,11 @@ data Config = Config
 
 -- | Mode to execute the main function.
 data RunMode
-  = Help    -- ^ Show help message.
-  | Version -- ^ Show version info.
-  | DoList  -- ^ Show benchmark names.
-  | DoBench -- ^ Run benchmarks.
+  = Help          -- ^ Show help message.
+  | Version       -- ^ Show version info.
+  | DoList        -- ^ Show benchmark names.
+  | DoIter Word64 -- ^ Run benchmarks, don't analyse.
+  | DoBench       -- ^ Run benchmarks.
 
 -- | Default configuration used for running benchmarks.
 defaultConfig :: Config
@@ -983,6 +1022,13 @@ options =
                 _ -> throw (InvalidArgument "verbosity" str))
       "INT")
      "Verbosity level (default: 1)"
+
+  , Option ['n'] ["iters"]
+    (ReqArg (\str o -> case readMaybe str :: Maybe Word64 of
+                Just n -> o {cfgRunMode = DoIter n}
+                _      -> throw (InvalidArgument "iters" str))
+    "INT")
+    "Run benchmarks, don't analyse"
 
   , Option ['m'] ["match"]
     (let modes = [("glob", Glob)

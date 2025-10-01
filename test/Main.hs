@@ -4,6 +4,7 @@ module Main (main) where
 -- base
 import           Control.Exception  (catch, fromException, throwIO)
 import           Data.Functor       (void)
+import           Data.IORef         (modifyIORef', newIORef, readIORef)
 import           System.Environment (withArgs)
 import           System.Exit        (ExitCode (..), exitFailure, exitSuccess)
 import           System.Info        (os)
@@ -102,10 +103,40 @@ benchmarkable = testGroup "benchmarkable"
             (pure 32)
             (pure . fib) ]])
 
+  , testGroup "iters"
+    [ testCase "iter batch bench" $
+      defaultMainWith ["-n", "3"]
+      [ bgroup "fib" [ bench "4" (nf fib 4)
+                     , bench "8" (nf fib 8) ]]
+    , testCase "iter perBatch bench" $
+      defaultMainWith ["-n", "3", "-L", "1"]
+      [ bgroup "fib" [ bench "4" (perBatchEnvWithCleanup
+                                 pure
+                                 (\n e -> (n + e) `seq` pure ())
+                                 (\_ -> fib 4 `seq` pure ()))]]
+    , testCase "iter perRun bench" $
+      defaultMainWith ["--iters", "3"]
+      [ bgroup "fib" [ withRunEnv "16" 16 ifib
+                     , withRunEnv "32" 32 ifib]
+      ]
+    , testCase "iter timeout" $
+      shouldExitFailure $
+      defaultMainWith ["--iters", "3000", "-L", "1"]
+      [ bgroup "fib" [ bench "36" (nf fib 36) ]
+      ]
+    ]
+
   , testGroup "interactive"
     [ testCase "simple function" $
       quietly $ benchmark (nf not True) ]
   ]
+
+withRunEnv :: String -> a -> (a -> a) -> Benchmark
+withRunEnv name ini f =
+  let alloc = newIORef ini
+      cleanup ref = readIORef ref >>= \v -> v `seq` pure ()
+      run ref = modifyIORef' ref f
+  in  bench name (perRunEnvWithCleanup alloc cleanup run)
 
 options :: TestTree
 options = testGroup "options"
@@ -527,6 +558,9 @@ quietly = hSilence [stdout, stderr]
 
 fib :: Int -> Integer
 fib n = if n < 2 then toInteger n else fib (n-1) + fib (n-2)
+
+ifib :: Int -> Int
+ifib n = if n < 2 then n else ifib (n-1) + ifib (n-2)
 
 fastfib :: Int -> Integer
 fastfib n = fibs !! n where

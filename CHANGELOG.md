@@ -18,6 +18,8 @@
 
 * Perform minor GC after running target function to update RTSStats.
 
+* Add `--iters` option to run benchmarks without analysis.
+
 * Silence the outputs in tests.
 
 ## 0.1.1.1 -- 2024-05-29
