@@ -366,16 +366,16 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
 showHelp :: IO ()
 showHelp = do
   me <- getProgName
-  putStrLn . (`usageInfo` options) $ intercalate "\n"
+  putStr . (`usageInfo` options) $ intercalate "\n"
     [ "Microbenchmark suite - " ++ builtWithMiniterion ++ "\n"
-    , yellow "USAGE:"
-    , "  " ++ green me ++ " [OPTIONS] [PATTERN]...\n"
-    , yellow "ARGS:"
+    , boldYellow "USAGE:"
+    , "  " ++ boldGreen me ++ " [OPTIONS] [PATTERN]...\n"
+    , boldYellow "ARGS:"
     , "  <PATTERN>...  Pattern(s) to select running benchmarks. If no pattern was"
     , "                given, run all benchmarks. Multiple patterns are combined"
     , "                with 'OR'. Selections are done by prefix match by default."
     , "                See also \"--match\" option below.\n"
-    , yellow "OPTIONS:"
+    , boldYellow "OPTIONS:"
     ]
 
 #ifndef VERSION_miniterion
@@ -772,13 +772,15 @@ glob pat0 = go pat0
 -- Terminal stuffs
 -- ------------------------------------------------------------------------
 
-red, green, yellow, boldCyan, white :: String -> String
-
+red, yellow, white :: String -> String
 red      = coloredString "1;31"
-green    = coloredString "0;32"
 yellow   = coloredString "0;33"
-boldCyan = coloredString "1;36"
 white    = coloredString "0;37"
+
+boldGreen, boldYellow, boldCyan :: String -> String
+boldGreen  = coloredString "1;32"
+boldYellow = coloredString "1;33"
+boldCyan   = coloredString "1;36"
 
 coloredString :: String -> String -> String
 coloredString param str
