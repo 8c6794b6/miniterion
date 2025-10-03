@@ -1300,18 +1300,18 @@ measure cfg num b =
 measureUntil :: Config -> Benchmarkable -> IO Summary
 measureUntil cfg@Config{..} b
   | is_once = fmap (measToSummary . fst) (measure cfg 1 b)
-  | otherwise = go_with initializeBatch
+  | otherwise = init_and_go
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
 
-    go_with initializer = do
+    init_and_go = do
       performGC
       start_time <- getTimePicoSecs cfgTimeMode
-      (m0, runner) <- initializer cfg b
-      go start_time m0 runner
+      (m0, acc) <- initializeAcc cfg b
+      go start_time m0 acc
 
-    go start_time m1 r = do
-      (m2, end_time) <- measure cfg (numRepeats r) b
+    go start_time m1 acc = do
+      (m2, end_time) <- measure cfg (acNumRepeats acc) b
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           meanN = measTime measN
@@ -1323,8 +1323,8 @@ measureUntil cfg@Config{..} b
       warnOnTooLongBenchmark cfgTimeout start_time end_time
 
       if is_stdev_in_target_range || is_timeout_soon
-        then pure $ summarize r m1 m2 est
-        else go start_time m2 (updateForNextRun r m2)
+        then pure $ summarize acc m1 m2 est
+        else go start_time m2 (updateForNextRun acc m2)
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq
@@ -1357,28 +1357,18 @@ warnOnTooLongBenchmark tout t_start t_now =
 
 
 -- ------------------------------------------------------------------------
--- Runner, the internal interface for measureUntil
+-- Accumulator for measureUntil
 -- ------------------------------------------------------------------------
 
-class Runner r where
-  numRepeats :: r -> Word64
-  summarize :: r -> Measurement -> Measurement -> Estimate -> Summary
-  updateForNextRun :: r -> Measurement -> r
-
-
--- ------------------------------------------------------------------------
--- Batch runner
--- ------------------------------------------------------------------------
-
-data Batch = Batch
-  { btPreviousNumRepeats :: !Word64
-  , btNumRepeats         :: !Word64
-  , btMeanMinMax         :: !MinMax
-  , btQueue              :: !(Queue Word64)
+data Acc = Acc
+  { acPreviousNumRepeats :: !Word64
+  , acNumRepeats         :: !Word64
+  , acMeanMinMax         :: !MinMax
+  , acQueue              :: !(Queue Word64)
   }
 
-initializeBatch :: Config -> Benchmarkable -> IO (Measurement, Batch)
-initializeBatch cfg b = do
+initializeAcc :: Config -> Benchmarkable -> IO (Measurement, Acc)
+initializeAcc cfg b = do
   debugStr cfg "*** Starting initialization\n"
   go 1
   where
@@ -1394,47 +1384,45 @@ initializeBatch cfg b = do
           debugStr cfg "*** Initialization done\n"
           let t_scaled = t `quot` n
           pure ( meas
-               , Batch { btPreviousNumRepeats = n
-                       , btNumRepeats = 2 * n
-                       , btMeanMinMax = toMinMax t_scaled
-                       , btQueue = enqueue t_scaled defaultQueue
-                       })
+               , Acc { acPreviousNumRepeats = n
+                     , acNumRepeats = 2 * n
+                     , acMeanMinMax = toMinMax t_scaled
+                     , acQueue = enqueue t_scaled defaultQueue
+                     })
 
-instance Runner Batch where
-  numRepeats = btNumRepeats
-  {-# INLINE numRepeats #-}
+summarize :: Acc -> Measurement -> Measurement -> Estimate -> Summary
+summarize ac m1 m2 (Estimate measN _stdevN) =
+  let Measurement meanN allocN copiedN maxMemN = measN
+      mean_scaled = scale meanN
+      meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
+      scale = (`quot` acPreviousNumRepeats ac)
+      mean_m2 = measTime m2 `quot` acNumRepeats ac
+      mean_mm = acMeanMinMax ac <> toMinMax mean_m2
+      stdevs = map scale (predictStdevs m1 m2)
+      stdev = sum stdevs `quot` 4
+      queue = enqueue mean_m2 (acQueue ac)
+      -- The queue contains scaled measurement values, each value is
+      -- computed from twice the number of repeats than the previous
+      -- value.
+      (ys, ns) = (toList queue, iterate (* 2) 1)
+      ys_and_ns = zipWith (\y n -> (fromIntegral y * n, n)) ys ns
+  in  Summary { smEstimate = Estimate meas stdev
+              , smMean = Ranged (mmMin mean_mm) mean_scaled (mmMax mean_mm)
+              , smStdev = Ranged (minimum stdevs) stdev (maximum stdevs)
+              , smMedian = computeMedian queue
+              , smRSquared = computeRSquared mean_scaled mean_mm ys_and_ns
+              }
+{-# INLINE summarize #-}
 
-  summarize bt m1 m2 (Estimate measN _stdevN) =
-    let Measurement meanN allocN copiedN maxMemN = measN
-        mean_scaled = scale meanN
-        meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
-        scale = (`quot` btPreviousNumRepeats bt)
-        mean_m2 = measTime m2 `quot` btNumRepeats bt
-        mean_mm = btMeanMinMax bt <> toMinMax mean_m2
-        stdevs = map scale (predictStdevs m1 m2)
-        stdev = sum stdevs `quot` 4
-        queue = enqueue mean_m2 (btQueue bt)
-        -- The queue contains scaled measurement values, each value is
-        -- computed from twice the number of repeats than the previous
-        -- value.
-        (ys, ns) = (toList queue, iterate (* 2) 1)
-        ys_and_ns = zipWith (\y n -> (fromIntegral y * n, n)) ys ns
-    in  Summary { smEstimate = Estimate meas stdev
-                , smMean = Ranged (mmMin mean_mm) mean_scaled (mmMax mean_mm)
-                , smStdev = Ranged (minimum stdevs) stdev (maximum stdevs)
-                , smMedian = computeMedian queue
-                , smRSquared = computeRSquared mean_scaled mean_mm ys_and_ns
-                }
-  {-# INLINE summarize #-}
-
-  updateForNextRun bt t2 =
-    let mean = measTime t2 `quot` btNumRepeats bt
-    in  bt { btPreviousNumRepeats = btNumRepeats bt
-           , btNumRepeats = btNumRepeats bt * 2
-           , btMeanMinMax = btMeanMinMax bt <> toMinMax mean
-           , btQueue = enqueue mean (btQueue bt)
-           }
-  {-# INLINE updateForNextRun #-}
+updateForNextRun :: Acc -> Measurement -> Acc
+updateForNextRun ac m =
+  let mean = measTime m `quot` acNumRepeats ac
+  in  ac { acPreviousNumRepeats = acNumRepeats ac
+         , acNumRepeats = acNumRepeats ac * 2
+         , acMeanMinMax = acMeanMinMax ac <> toMinMax mean
+         , acQueue = enqueue mean (acQueue ac)
+         }
+{-# INLINE updateForNextRun #-}
 
 
 -- ------------------------------------------------------------------------
