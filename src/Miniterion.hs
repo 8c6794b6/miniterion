@@ -74,8 +74,8 @@ module Miniterion
 
 -- base
 import           Control.Exception     (Exception (..), SomeException (..),
-                                        bracket, evaluate, handle, throw,
-                                        throwIO)
+                                        bracket, evaluate, finally, handle,
+                                        throw, throwIO)
 import           Control.Monad         (guard, replicateM_, void, when)
 import           Data.Char             (toLower)
 import           Data.Foldable         (find)
@@ -1166,9 +1166,12 @@ data Measurement = Measurement
   , measMaxMem :: {-# UNPACK #-} !Word64 -- ^ max memory in use
   }
 
+-- | Measurement paired with end time.
+type Measured = (Measurement, Word64)
+
 data Estimate = Estimate
   { estMean  :: {-# UNPACK #-} !Measurement
-  , estStdev :: {-# UNPACK #-} !Word64  -- ^ stdev in picoseconds
+  , estStdev :: {-# UNPACK #-} !Word64 -- ^ stdev in picoseconds
   }
 
 type Mean = Ranged Word64
@@ -1210,10 +1213,10 @@ predictPerturbed t1 t2 = Estimate
     (estStdev (predict (hi t1) (lo t2)))
   }
   where
-    prec = max (fromInteger cpuTimePrecision) oneMillisecond
-    hi meas = meas { measTime = measTime meas + prec }
-    lo meas | measTime meas > prec = meas { measTime = measTime meas - prec }
-            | otherwise            = meas { measTime = 0 }
+    hi meas = meas { measTime = measTime meas + precision }
+    lo meas | measTime meas > precision =
+              meas { measTime = measTime meas - precision }
+            | otherwise = meas { measTime = 0 }
 
 predictStdevs :: Measurement -> Measurement -> [Word64]
 predictStdevs t1 t2 = map estStdev [v1,v2,v3,v4]
@@ -1222,36 +1225,69 @@ predictStdevs t1 t2 = map estStdev [v1,v2,v3,v4]
     v2 = predict (lo t1) (hi t2)
     v3 = predict (hi t1) (lo t2)
     v4 = predict (hi t1) (hi t2)
-    lo m = m { measTime = measTime m - prec }
-    hi m = m { measTime = measTime m + prec }
-    prec = max (fromInteger cpuTimePrecision) oneMillisecond
+    lo m = m { measTime = measTime m - precision }
+    hi m = m { measTime = measTime m + precision }
+
+precision :: Word64
+precision = max (fromInteger cpuTimePrecision) oneMillisecond
+{-# INLINEABLE precision #-}
 
 -- | One millisecond in picoseconds.
 oneMillisecond :: Num a => a
 oneMillisecond = 1000000000
 {-# INLINE oneMillisecond #-}
 
-measure :: Config -> Word64 -> Benchmarkable -> IO Measurement
-measure cfg n b = fmap fst (measureAndEndTime cfg n b)
-{-# INLINE measure #-}
+-- See 'Criterion.Measurement.runBenchmarkable' in the
+-- criterion-measurement package.
+runLoop :: Benchmarkable -> Word64 -> (Word64 -> IO () -> IO Measured)
+        -> IO Measured
+runLoop Benchmarkable{..} n f
+  | perRun    = work >>= go (n - 1)
+  | otherwise = work
+  where
+    go 0 result   = pure result
+    go !i !result = work >>= go (i - 1) . comb result
 
-measureAndEndTime :: Config -> Word64 -> Benchmarkable
-                   -> IO (Measurement, Word64)
-measureAndEndTime cfg n Benchmarkable{..} =
-  bracket (allocEnv n) (cleanEnv n) $ \env0 -> do
+    count | perRun = 1
+          | otherwise = n
+
+    work = do
+      e <- allocEnv count
+      let clean = cleanEnv count e
+          run = runRepeatedly e count
+      clean `seq` run `seq` evaluate (rnf e)
+      f count run `finally` clean
+    {-# INLINE work #-}
+
+    comb (!m1, _) (!m2, !e2) = (m3, e2)
+      where
+        on h g = h (g m1) (g m2)
+        add = on (+)
+        max_of = on max
+        m3 = Measurement { measTime = add measTime
+                         , measAllocs = add measAllocs
+                         , measCopied = add measCopied
+                         , measMaxMem = max_of measMaxMem
+                         }
+    {-# INLINE comb #-}
+{-# INLINE runLoop #-}
+
+measure :: Config -> Word64 -> Benchmarkable -> IO Measured
+measure cfg num b =
+  runLoop b num $ \ !n act -> do
     let getTimePicoSecs' = getTimePicoSecs (cfgTimeMode cfg)
-    performGC
-    startTime <- getTimePicoSecs'
-    (startAllocs, startCopied, startMaxMemInUse) <- getAllocsAndCopied
-    runRepeatedly env0 n
-    endTime <- getTimePicoSecs'
-    performMinorGC -- update RTSStats
-    (endAllocs, endCopied, endMaxMemInUse) <- getAllocsAndCopied
+    performMinorGC
+    start_time <- getTimePicoSecs'
+    (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied
+    act
+    end_time <- getTimePicoSecs'
+    performMinorGC
+    (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied
     let meas = Measurement
-          { measTime   = endTime - startTime
-          , measAllocs = endAllocs - startAllocs
-          , measCopied = endCopied - startCopied
-          , measMaxMem = max endMaxMemInUse startMaxMemInUse
+          { measTime = end_time - start_time
+          , measAllocs = end_allocs - start_allocs
+          , measCopied = end_copied - start_copied
+          , measMaxMem = max end_max_mem start_max_mem
           }
 
     debugStr cfg $
@@ -1259,39 +1295,36 @@ measureAndEndTime cfg n Benchmarkable{..} =
       ++ (if n == 1 then " iteration gives " else " iterations give ")
       ++ formatMeasurement n meas ++ "\n"
 
-    pure (meas, endTime)
+    pure (meas, end_time)
 
 measureUntil :: Config -> Benchmarkable -> IO Summary
 measureUntil cfg@Config{..} b
-  | is_once = fmap measToSummary (measure cfg 1 b)
-  | perRun b = go_with initializeSingle
+  | is_once = fmap (measToSummary . fst) (measure cfg 1 b)
   | otherwise = go_with initializeBatch
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
 
     go_with initializer = do
-      t_start <- getTimePicoSecs cfgTimeMode
+      performGC
+      start_time <- getTimePicoSecs cfgTimeMode
       (m0, runner) <- initializer cfg b
-      go t_start m0 runner
+      go start_time m0 runner
 
-    go :: Runner r => Word64 -> Measurement -> r -> IO Summary
-    go t_start m1 r = do
-      (m2, t_end) <- measureAndEndTime cfg (numRepeats r) b
+    go start_time m1 r = do
+      (m2, end_time) <- measure cfg (numRepeats r) b
 
-      let est@(Estimate measN stdevN) = computeEstimate r m1 m2
+      let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           meanN = measTime measN
-          extra = timeoutExtra r m2
-          is_timeout_soon = timeoutSoon cfgTimeout t_start (t_end + extra)
+          end_time' = end_time + measTime m2 * 2 + (30 * oneMillisecond)
+          is_timeout_soon = timeoutSoon cfgTimeout start_time end_time'
           target_stdev = truncate (cfgRelStDev * word64ToDouble meanN)
           is_stdev_in_target_range = stdevN < target_stdev
 
-      warnOnTooLongBenchmark cfgTimeout t_start t_end
+      warnOnTooLongBenchmark cfgTimeout start_time end_time
 
       if is_stdev_in_target_range || is_timeout_soon
         then pure $ summarize r m1 m2 est
-        else go t_start m2 (updateForNextRun r m2 est)
-    {-# SPECIALIZE go :: Word64 -> Measurement -> Batch -> IO Summary #-}
-    {-# SPECIALIZE go :: Word64 -> Measurement -> Single -> IO Summary #-}
+        else go start_time m2 (updateForNextRun r m2)
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq
@@ -1329,10 +1362,9 @@ warnOnTooLongBenchmark tout t_start t_now =
 
 class Runner r where
   numRepeats :: r -> Word64
-  computeEstimate :: r -> Measurement -> Measurement -> Estimate
-  timeoutExtra :: r -> Measurement -> Word64
   summarize :: r -> Measurement -> Measurement -> Estimate -> Summary
-  updateForNextRun :: r -> Measurement -> Estimate -> r
+  updateForNextRun :: r -> Measurement -> r
+
 
 -- ------------------------------------------------------------------------
 -- Batch runner
@@ -1350,14 +1382,13 @@ initializeBatch cfg b = do
   debugStr cfg "*** Starting initialization\n"
   go 1
   where
-    threshold =
-      max (fromInteger cpuTimePrecision) oneMillisecond * 30
+    -- Discarding Measurement data when the total duration is
+    -- shorter than threshold. Too short measurement is considered
+    -- imprecise and unreliable.
+    threshold = precision * 30
     go n = do
-      meas@(Measurement t _ _ _) <- measure cfg n b
+      meas@(Measurement t _ _ _) <- fmap fst (measure cfg n b)
       if t < threshold
-        -- Discarding Measurement data when the total duration is
-        -- shorter than threshold. Too short measurement is considered
-        -- imprecise and unreliable.
         then go (n * 2)
         else do
           debugStr cfg "*** Initialization done\n"
@@ -1372,12 +1403,6 @@ initializeBatch cfg b = do
 instance Runner Batch where
   numRepeats = btNumRepeats
   {-# INLINE numRepeats #-}
-
-  computeEstimate _bt = predictPerturbed
-  {-# INLINE computeEstimate #-}
-
-  timeoutExtra _bt m = 2 * measTime m + (30 * oneMillisecond)
-  {-# INLINE timeoutExtra #-}
 
   summarize bt m1 m2 (Estimate measN _stdevN) =
     let Measurement meanN allocN copiedN maxMemN = measN
@@ -1402,7 +1427,7 @@ instance Runner Batch where
                 }
   {-# INLINE summarize #-}
 
-  updateForNextRun bt t2 _est =
+  updateForNextRun bt t2 =
     let mean = measTime t2 `quot` btNumRepeats bt
     in  bt { btPreviousNumRepeats = btNumRepeats bt
            , btNumRepeats = btNumRepeats bt * 2
@@ -1410,121 +1435,6 @@ instance Runner Batch where
            , btQueue = enqueue mean (btQueue bt)
            }
   {-# INLINE updateForNextRun #-}
-
-
--- ------------------------------------------------------------------------
--- One-by-one runner
--- ------------------------------------------------------------------------
-
-data Single = Single
-  { snAggregate   :: !Aggregate
-  , snMeanMinMax  :: !MinMax
-  , snStdevMinMax :: !MinMax
-  , snQueue       :: !(Queue Word64)
-  }
-
-initializeSingle :: Config -> Benchmarkable -> IO (Measurement, Single)
-initializeSingle cfg b = do
-  m1 <- measure cfg 1 b
-  m2 <- measure cfg 1 b
-  let ts = [m1, m2]
-      agg = initAgg ts
-      mean_mm = toMinMax (measTime m1) <> toMinMax (measTime m2)
-      stdev = estStdev (aggToEstimate m1 m2 agg)
-      stdev_mm = toMinMax stdev
-  pure ( m1
-       , Single { snAggregate = agg
-                , snMeanMinMax = mean_mm
-                , snStdevMinMax = stdev_mm
-                , snQueue = enqueue (measTime m2)
-                            (enqueue (measTime m1) defaultQueue)
-                })
-
-instance Runner Single where
-  numRepeats _sn = 1
-  {-# INLINE numRepeats #-}
-
-  computeEstimate sn m1 m2 = aggToEstimate m1 m2 (snAggregate sn)
-  {-# INLINE computeEstimate #-}
-
-  timeoutExtra _sn m = max (measTime m * 6 `quot` 5) (30 * oneMillisecond)
-  {-# INLINE timeoutExtra #-}
-
-  summarize sn _m1 m2 est =
-    let mean_m2 = measTime m2
-        mean_mm = snMeanMinMax sn <> toMinMax mean_m2
-        mean_est = measTime (estMean est)
-        queue = enqueue mean_m2 (snQueue sn)
-        stdev = estStdev est
-        stdev_mm = snStdevMinMax sn
-        -- Adding up measured time to compare with constantly
-        -- increasing sequence.
-        (ys, ns) = (scanl1 (+) (toList queue), [1,2..])
-        ys_and_ns = zipWith (\y n -> (fromIntegral y, n)) ys ns
-    in  Summary { smEstimate = est
-                , smMean = fitInRange (mmMin mean_mm) mean_est (mmMax mean_mm)
-                , smStdev = fitInRange (mmMin stdev_mm) stdev (mmMax stdev_mm)
-                , smMedian = computeMedian queue
-                , smRSquared = computeRSquared mean_est mean_mm ys_and_ns
-                }
-  {-# INLINE summarize #-}
-
-  updateForNextRun sn m est =
-    let mean = measTime m
-        stdev = estStdev est
-    in  sn { snAggregate = updateAgg mean (snAggregate sn)
-           , snMeanMinMax = snMeanMinMax sn <> toMinMax mean
-           , snStdevMinMax = snStdevMinMax sn <> toMinMax stdev
-           , snQueue = enqueue mean (snQueue sn)
-           }
-  {-# INLINE updateForNextRun #-}
-
-
--- ------------------------------------------------------------------------
--- State for perRunEnvWithCleanup
--- ------------------------------------------------------------------------
-
-data Aggregate = Aggregate
-  { aggCount :: {-# UNPACK #-} !Word64 -- ^ Number of computations.
-  , aggMean  :: {-# UNPACK #-} !Double -- ^ Mean of the time.
-  , aggM2    :: {-# UNPACK #-} !Double
-  -- ^ Sum of squares of differences from the current mean.
-  }
-
-aggToEstimate :: Measurement -> Measurement -> Aggregate -> Estimate
-aggToEstimate (Measurement _ a1 c1 m1) (Measurement _ a2 c2 m2) agg = est
-  where
-    est = Estimate mean stdev
-    mean | hasGCStats = Measurement am' (avg a1 a2) (avg c1 c2) (max m1 m2)
-         | otherwise  = Measurement am' 0 0 0
-    avg a b = (a + b) `quot` 2
-    stdev = truncate (sqrt (aggM2 agg / word64ToDouble (aggCount agg - 1)))
-    am' = truncate (aggMean agg)
-{-# INLINABLE aggToEstimate #-}
-
--- Welford's online algorithm, see:
---
---   https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
-
-updateAgg :: Word64 -> Aggregate -> Aggregate
-updateAgg t (Aggregate n am am2) = Aggregate n' am' am2'
-  where
-    n' = n + 1
-    am' = am + (delta / word64ToDouble n')
-    am2' = am2 + (delta * delta2)
-    delta = t' - am
-    delta2 = t' - am'
-    t' = word64ToDouble t
-{-# INLINABLE updateAgg #-}
-
-initAgg :: [Measurement] -> Aggregate
-initAgg ms = Aggregate {aggCount = n, aggMean = mean0, aggM2 = m20}
-  where
-    n :: Num a => a
-    n = fromIntegral (length ms)
-    mean0 = word64ToDouble (foldr ((+) . measTime) 0 ms) / n
-    m20 = foldr ((+) . sqrdiff) 0 ms / (n - 1)
-    sqrdiff t = sqr (mean0 - word64ToDouble (measTime t))
 
 
 -- ------------------------------------------------------------------------
