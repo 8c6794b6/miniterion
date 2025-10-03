@@ -1361,10 +1361,8 @@ warnOnTooLongBenchmark tout t_start t_now =
 -- ------------------------------------------------------------------------
 
 data Acc = Acc
-  { acPreviousNumRepeats :: !Word64
-  , acNumRepeats         :: !Word64
-  , acMeanMinMax         :: !MinMax
-  , acQueue              :: !(Queue Word64)
+  { acNumRepeats :: !Word64
+  , acQueue      :: !(Queue Word64)
   }
 
 initializeAcc :: Config -> Benchmarkable -> IO (Measurement, Acc)
@@ -1384,9 +1382,7 @@ initializeAcc cfg b = do
           debugStr cfg "*** Initialization done\n"
           let t_scaled = t `quot` n
           pure ( meas
-               , Acc { acPreviousNumRepeats = n
-                     , acNumRepeats = 2 * n
-                     , acMeanMinMax = toMinMax t_scaled
+               , Acc { acNumRepeats = 2 * n
                      , acQueue = enqueue t_scaled defaultQueue
                      })
 
@@ -1395,34 +1391,40 @@ summarize ac m1 m2 (Estimate measN _stdevN) =
   let Measurement meanN allocN copiedN maxMemN = measN
       mean_scaled = scale meanN
       meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
-      scale = (`quot` acPreviousNumRepeats ac)
+      scale = (`quot` (acNumRepeats ac `quot` 2))
       mean_m2 = measTime m2 `quot` acNumRepeats ac
-      mean_mm = acMeanMinMax ac <> toMinMax mean_m2
       stdevs = map scale (predictStdevs m1 m2)
       stdev = sum stdevs `quot` 4
-      queue = enqueue mean_m2 (acQueue ac)
+      (stdev_min, stdev_max) = minMax stdevs
       -- The queue contains scaled measurement values, each value is
       -- computed from twice the number of repeats than the previous
       -- value.
+      queue = enqueue mean_m2 (acQueue ac)
       (ys, ns) = (toList queue, iterate (* 2) 1)
       ys_and_ns = zipWith (\y n -> (fromIntegral y * n, n)) ys ns
+      (mean_min, mean_max) = minMax ys
+      r_squared = computeRSquared mean_scaled mean_min mean_max ys_and_ns
   in  Summary { smEstimate = Estimate meas stdev
-              , smMean = Ranged (mmMin mean_mm) mean_scaled (mmMax mean_mm)
-              , smStdev = Ranged (minimum stdevs) stdev (maximum stdevs)
+              , smMean = Ranged mean_min mean_scaled mean_max
+              , smStdev = Ranged stdev_min stdev stdev_max
               , smMedian = computeMedian queue
-              , smRSquared = computeRSquared mean_scaled mean_mm ys_and_ns
+              , smRSquared = r_squared
               }
 {-# INLINE summarize #-}
 
 updateForNextRun :: Acc -> Measurement -> Acc
 updateForNextRun ac m =
   let mean = measTime m `quot` acNumRepeats ac
-  in  ac { acPreviousNumRepeats = acNumRepeats ac
-         , acNumRepeats = acNumRepeats ac * 2
-         , acMeanMinMax = acMeanMinMax ac <> toMinMax mean
+  in  ac { acNumRepeats = acNumRepeats ac * 2
          , acQueue = enqueue mean (acQueue ac)
          }
 {-# INLINE updateForNextRun #-}
+
+minMax :: [Word64] -> (Word64, Word64)
+minMax = foldr f (maxBound, minBound)
+  where
+    f x (amin, amax) = (min amin x, max amax x)
+{-# INLINABLE minMax #-}
 
 
 -- ------------------------------------------------------------------------
@@ -1448,20 +1450,6 @@ toRanged :: a -> Ranged a
 toRanged x = Ranged x x x
 {-# INLINE toRanged #-}
 
--- | Data type to compare values and to hold minimum and maximum at once.
-data MinMax = MinMax
-  { mmMin :: {-# UNPACK #-} !Word64
-  , mmMax :: {-# UNPACK #-} !Word64
-  }
-
-instance Semigroup MinMax where
-  MinMax min1 max1 <> MinMax min2 max2 = MinMax (min min1 min2) (max max1 max2)
-  {-# INLINE (<>) #-}
-
-toMinMax :: Word64 -> MinMax
-toMinMax w = MinMax w w
-{-# INLINE toMinMax #-}
-
 
 -- ------------------------------------------------------------------------
 -- Median and R² computed from last k elements
@@ -1485,15 +1473,15 @@ computeMedian q@(Queue _ size _ _) = Ranged lo mid hi
 -- | Compute coefficient of determination from means and a list of
 -- (x,y) pairs. Regression function is simply @f(x) = ax + b@ where @b
 -- = 0@ and @a@ is the mean values.
-computeRSquared :: Word64 -> MinMax -> [(Double, Double)]  -> RSquared
-computeRSquared expected MinMax{..} ys_and_xs =
+computeRSquared :: Word64 -> Word64 -> Word64 -> [(Double, Double)] -> RSquared
+computeRSquared e1 e2 e3 ys_and_xs =
   let (ys, xs) = unzip ys_and_xs
       f e x = fromIntegral e * x
       y_bar = sum ys / sum xs
       sse e = sum [sqr (yi - f e x) | (yi, x) <- ys_and_xs]
       sst = sum [sqr (yi - y_bar) | yi <- ys]
       rsq e = 1 - (sse e / sst)
-  in  fitInRange (rsq expected) (rsq mmMin) (rsq mmMax)
+  in  fitInRange (rsq e1) (rsq e2) (rsq e3)
 {-# INLINABLE computeRSquared #-}
 
 
