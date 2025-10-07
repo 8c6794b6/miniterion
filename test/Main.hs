@@ -439,9 +439,10 @@ formatPicos = testGroup "format picos"
       assertPicos 123456 "123.5 ns"
 
   , testCase "micro seconds" $ do
-      assertPicos 1234567 ("1.235 " ++ [mu] ++ "s")
-      assertPicos 12345678 ("12.35 " ++ [mu] ++ "s")
-      assertPicos 123456789 ("123.5 " ++ [mu] ++ "s")
+      e <- getDefaultMEnv
+      assertPicos 1234567 ("1.235 " ++ [mu e] ++ "s")
+      assertPicos 12345678 ("12.35 " ++ [mu e] ++ "s")
+      assertPicos 123456789 ("123.5 " ++ [mu e] ++ "s")
 
   , testCase "milli seconds" $ do
       assertPicos 1234567890 "1.235 ms"
@@ -455,7 +456,10 @@ formatPicos = testGroup "format picos"
       assertPicos 1234567890123456 "1234.6 s"
   ]
   where
-    assertPicos n str = assertEqual (show n) str (showPicos5 n)
+    assertPicos n str = do
+      menv <- getDefaultMEnv
+      let picos = docToString menv (showPicos5 n)
+      assertEqual (show n) str picos
 
 formatBytes :: TestTree
 formatBytes = testGroup "format bytes"

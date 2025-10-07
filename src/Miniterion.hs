@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                       #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE LambdaCase                #-}
+{-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE RecordWildCards           #-}
 {-# OPTIONS_GHC -funbox-strict-fields  #-}
 {- |
@@ -61,6 +62,9 @@ module Miniterion
   , showBytes
   , mu
 
+  , getDefaultMEnv
+  , docToString
+
   , Ranged(..)
   , fitInRange
 
@@ -80,8 +84,9 @@ import           Control.Monad         (guard, replicateM_, void, when)
 import           Data.Char             (toLower)
 import           Data.Foldable         (find)
 import           Data.Int              (Int64)
-import           Data.List             (intercalate, isPrefixOf, nub, sort,
-                                        stripPrefix, tails, unfoldr)
+import           Data.List             (isPrefixOf, nub, sort, stripPrefix,
+                                        tails, unfoldr)
+import           Data.String           (IsString (..))
 import           Data.Word             (Word64)
 import           GHC.Clock             (getMonotonicTime)
 import           GHC.Stats             (RTSStats (..), getRTSStats,
@@ -94,7 +99,6 @@ import           System.Exit           (die, exitFailure)
 import           System.IO             (BufferMode (..), Handle, IOMode (..),
                                         hFlush, hIsTerminalDevice, hPutStrLn,
                                         hSetBuffering, stderr, stdout, withFile)
-import           System.IO.Unsafe      (unsafePerformIO)
 import           System.Mem            (performGC, performMinorGC)
 import           System.Timeout        (timeout)
 import           Text.Printf           (printf)
@@ -350,12 +354,13 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
   args <- getArgs
   let (opts, pats, invalids, errs) = getOpt' Permute options args
       cfg1 = foldl' (flip id) cfg0 opts
-      menv0 = defaultMEnv {mePatterns = pats, meConfig = cfg1}
+  default_menv <- getDefaultMEnv
+  let menv0 = default_menv {mePatterns = pats, meConfig = cfg1}
       root_bs = bgroup "" bs
       do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
       do_bench menv = runBenchmark menv root_bs >>= summariseResults
   case cfgRunMode cfg1 of
-    Help     -> showHelp
+    Help     -> showHelp menv0
     _         | not (null errs)     -> errorOptions errs
               | not (null invalids) -> invalidOptions invalids
     Version  -> putStrLn builtWithMiniterion
@@ -363,18 +368,17 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
     DoIter n -> do_iter n
     DoBench  -> withCsvSettings menv0 do_bench
 
-showHelp :: IO ()
-showHelp = do
-  me <- getProgName
-  putStr . (`usageInfo` options) $ intercalate "\n"
-    [ "Microbenchmark suite - " ++ builtWithMiniterion ++ "\n"
-    , boldYellow "USAGE:"
-    , "  " ++ boldGreen me ++ " [OPTIONS] [PATTERN]...\n"
-    , boldYellow "ARGS:"
-    , "  <PATTERN>...  Pattern(s) to select running benchmarks. If no pattern was"
-    , "                given, run all benchmarks. Multiple patterns are combined"
-    , "                with 'OR'. Selections are done by prefix match by default."
-    , "                See also \"--match\" option below.\n"
+showHelp :: MEnv -> IO ()
+showHelp menv = do
+  me <- fmap fromString getProgName
+  putStr $ (`usageInfo` options) $ docToString menv $ mconcat
+    [ "Microbenchmark suite - " <> stringToDoc builtWithMiniterion <> "\n\n"
+    , boldYellow "USAGE:" <> " " <> boldGreen me <> " [OPTIONS] [PATTERN]...\n\n"
+    , boldYellow "ARGS:\n"
+    , "  <PATTERN>...  Pattern(s) to select running benchmarks. If no pattern was\n"
+    , "                given, run all benchmarks. Multiple patterns are combined\n"
+    , "                with 'OR'. Selections are done by prefix match by default.\n"
+    , "                See also \"--match\" option below.\n\n"
     , boldYellow "OPTIONS:"
     ]
 
@@ -411,15 +415,21 @@ showNames menv =
 
 -- | Internal environment for miniterion.
 data MEnv = MEnv
-  { meConfig      :: !Config
+  { meConfig          :: !Config
     -- ^ Configuration of this environment.
-  , mePatterns    :: ![String]
+  , mePatterns        :: ![String]
     -- ^ Patterns to filter running benchmarks
-  , meCsvHandle   :: !(Maybe Handle)
+  , meCsvHandle       :: !(Maybe Handle)
     -- ^ File handle to write benchmark result in CSV format.
-  , meBaselineSet :: !Baseline
+  , meBaselineSet     :: !Baseline
     -- ^ Set containing baseline information, made from the file
     -- specified by 'cfgBaselinePath'.
+  , meTerminalDevice  :: !Bool
+    -- ^ 'True' if the output is a terminal device.
+  , meSupportsUnicode :: !Bool
+    -- ^ 'True' if unicode is supported.
+  , meHasGCStats      :: !Bool
+    -- ^ 'True' if GC statistics are available.
   }
 
 -- | The default environment.
@@ -429,7 +439,21 @@ defaultMEnv = MEnv
   , meBaselineSet = mempty
   , mePatterns = []
   , meConfig = defaultConfig
+  , meTerminalDevice = False
+  , meSupportsUnicode = False
+  , meHasGCStats = False
   }
+
+getDefaultMEnv :: IO MEnv
+getDefaultMEnv = do
+  is_terminal_device <- hIsTerminalDevice stdout
+  supports_unicode <- isUnicodeSupported
+  has_gc_stats <- getGCStatsEnabled
+  pure defaultMEnv
+    { meTerminalDevice = is_terminal_device
+    , meSupportsUnicode = supports_unicode
+    , meHasGCStats = has_gc_stats
+    }
 
 
 -- ------------------------------------------------------------------------
@@ -450,7 +474,7 @@ summariseResults rs = do
       f (!done, !fl) r = case r of
         Done -> (done + 1, fl)
         _    -> (done + 1, fl + 1)
-      bs = if 1 < num_result then "benchmarks" else "benchmark"
+      bs = if 1 < num_result then "benchmarks" else "benchmark" :: String
       pr (name, why) = putStrLn ("  - " ++ name ++ " (" ++ why ++ ")")
   when (0 < num_failed) $ do
     printf "\n%d out of %d %s failed:\n" num_failed num_result bs
@@ -501,10 +525,10 @@ runBenchmarkable :: MEnv -> [String] -> String -> Benchmarkable -> IO Result
 runBenchmarkable menv@MEnv {meConfig=cfg} parents name b = do
   let fullname = pathToName parents name
 
-  infoBenchname cfg fullname
-  debugStr cfg "\n"
+  infoBenchname menv fullname
+  debugStr menv "\n"
   hFlush stdout
-  mb_sum <- withTimeout (cfgTimeout cfg) (measureUntil cfg b)
+  mb_sum <- withTimeout (cfgTimeout cfg) (measureUntil menv b)
 
   let upper = 1 + cfgFailIfSlower cfg
       lower = 1 - cfgFailIfFaster cfg
@@ -519,13 +543,13 @@ runBenchmarkable menv@MEnv {meConfig=cfg} parents name b = do
             Nothing  -> (Done, Nothing)
             Just cmp -> (is_acceptable cmp, Just cmp)
 
-  infoStr cfg (formatResult result mb_sum mb_cmp)
-  mapM_ (putCsvLine fullname mb_sum) (meCsvHandle menv)
+  infoStr menv (formatResult result mb_sum mb_cmp)
+  mapM_ (putCsvLine menv fullname mb_sum) (meCsvHandle menv)
   pure result
 
 iterBenchmarkable :: Word64 -> MEnv -> [String] -> String -> Benchmarkable
                   -> IO Result
-iterBenchmarkable n MEnv{meConfig=cfg} parents name Benchmarkable{..} = do
+iterBenchmarkable n menv@MEnv{meConfig=cfg} parents name Benchmarkable{..} = do
   let fullname = pathToName parents name
       run i =
         bracket (allocEnv i) (cleanEnv i) (\e -> runRepeatedly e i)
@@ -535,20 +559,20 @@ iterBenchmarkable n MEnv{meConfig=cfg} parents name Benchmarkable{..} = do
       go | perRun    = replicateM_ (fromIntegral n) (run 1)
          | otherwise = run n
 
-  infoBenchname cfg fullname
+  infoBenchname menv fullname
   hFlush stdout
   mb_unit <- withTimeout (cfgTimeout cfg) go
 
   case mb_unit of
-    Just () -> infoStr cfg "\n" >> pure Done
+    Just () -> infoStr menv "\n" >> pure Done
     _ -> do
       let result = TimedOut fullname
-      infoStr cfg (formatResult result Nothing Nothing)
+      infoStr menv (formatResult result Nothing Nothing)
       pure result
 
-infoBenchname :: Config -> String -> IO ()
-infoBenchname cfg name =
-  infoStr cfg (white "benchmarking " ++ boldCyan name ++ " ")
+infoBenchname :: MEnv -> String -> IO ()
+infoBenchname menv name =
+  infoStr menv (white "benchmarking " <> boldCyan (fromString name) <> " ")
 {-# INLINE infoBenchname #-}
 
 withTimeout :: Timeout -> IO a -> IO (Maybe a)
@@ -585,96 +609,99 @@ noop = const (pure ())
 -- Printing with verbosity
 -- ------------------------------------------------------------------------
 
-infoStr, debugStr :: Config -> String -> IO ()
+infoStr, debugStr :: MEnv -> Doc -> IO ()
+infoStr = putDocWith 1
+debugStr = putDocWith 2
 
-infoStr = putWith 1 putStr
-debugStr = putWith 2 putStr
-
-putWith :: Applicative m => Int -> (a -> m ()) -> Config -> a -> m ()
-putWith n act cfg x = when (n <= cfgVerbosity cfg) $ act x
+putDocWith :: Int -> MEnv -> Doc -> IO ()
+putDocWith n menv doc =
+  when (n <= cfgVerbosity (meConfig menv)) $ putDoc menv doc
 
 
 -- ------------------------------------------------------------------------
 -- Formatting
 -- ------------------------------------------------------------------------
 
-formatResult :: Result -> Maybe Summary -> Maybe Double -> String
+formatResult :: Result -> Maybe Summary -> Maybe Double -> Doc
 formatResult _ Nothing _ =
-  red "FAIL" ++ "\n" ++
+  boldRed "FAIL" <> "\n" <>
   yellow "Timed out while running this benchmark\n\n"
 formatResult res (Just summary) mb_cmp =
-  fail_or_blank ++ "\n" ++
+  fail_or_blank <> "\n" <>
   --
-  white "mean                 " ++ showPicos5 (measTime m) ++ "   " ++
-  show_minmax (irLo mean) (irHi mean) ++
-  maybe "" (formatSlowDown res) mb_cmp ++ "\n" ++
+  white "mean                 " <> showPicos5 (measTime m) <> "   " <>
+  show_minmax (irLo mean) (irHi mean) <>
+  maybe "" (formatSlowDown res) mb_cmp <> "\n" <>
   --
-  id    "                     " ++ rsq_str id (irMid rsq) ++ "   " ++
-  show_minmax_rsq ++ "\n" ++
+  id    "                     " <> rsq_str id (irMid rsq) <> "   " <>
+  show_minmax_rsq <> "\n" <>
   --
-  white "median               " ++ showPicos5 (irMid med) ++ "   " ++
-  show_minmax (irLo med) (irHi med) ++ "\n" ++
+  white "median               " <> showPicos5 (irMid med) <> "   " <>
+  show_minmax (irLo med) (irHi med) <> "\n" <>
   --
-  white "std dev              " ++ showPicos5 (2 * irMid stdev) ++ "   " ++
-  show_minmax (2 * irLo stdev) (2 * irHi stdev) ++
+  white "std dev              " <> showPicos5 (2 * irMid stdev) <> "   " <>
+  show_minmax (2 * irLo stdev) (2 * irHi stdev) <>
   --
-  formatGC m ++ "\n\n"
+  formatGC m <> "\n\n"
   where
     Summary (Estimate m _) mean stdev med rsq = summary
     fail_or_blank
-      | isTooFast res || isTooSlow res = red "FAIL"
+      | isTooFast res || isTooSlow res = boldRed "FAIL"
       | otherwise = ""
     show_minmax lo hi =
-      white ("(" ++ showPicos5 lo ++ " .. " ++ showPicos5 hi ++ ")")
-    rsq_str on_otherwise val = color (printf "%.3f R²" val)
+      white ("(" <> showPicos5 lo <> " .. " <> showPicos5 hi <> ")")
+    rsq_str on_other val = color (stringToDoc (printf "%.3f R²" val))
       where
-        color | val < 0.90 = red
+        color | val < 0.90 = boldRed
               | val < 0.99 = yellow
-              | otherwise = on_otherwise
+              | otherwise = on_other
     show_minmax_rsq =
-      white "(" ++ rsq_str white (irLo rsq) ++ white " .. " ++
-      rsq_str white (irHi rsq) ++ white ")"
+      white "(" <> rsq_str white (irLo rsq) <> white " .. " <>
+      rsq_str white (irHi rsq) <> white ")"
 
-formatSlowDown :: Result -> Double -> String
+formatSlowDown :: Result -> Double -> Doc
 formatSlowDown result ratio = case percents `compare` 0 of
   LT -> in_yellow isTooFast $ printf " (%2i%% less than baseline)" (-percents)
-  EQ -> white                          "       (same as baseline)"
+  EQ -> white                         "       (same as baseline)"
   GT -> in_yellow isTooSlow $ printf " (%2i%% more than baseline)" percents
   where
     percents :: Int64
     percents = truncate ((ratio - 1) * 100)
-    in_yellow test = if test result then yellow else white
+    in_yellow test = (if test result then yellow else white) . fromString
 
 -- | Show picoseconds, fitting number in 5 characters.
-showPicos5 :: Word64 -> String
+showPicos5 :: Word64 -> Doc
 showPicos5 i
-  | t < 10     = printf "%.3f ps" t
-  | t < 100    = printf "%.2f ps" t
-  | t < 1000   = printf "%.1f ps" t
-  | t < 999e1  = printf "%.3f ns" (t / 1e3)
-  | t < 999e2  = printf "%.2f ns" (t / 1e3)
-  | t < 999e3  = printf "%.1f ns" (t / 1e3)
-  | t < 999e4  = printf "%.3f %cs" (t / 1e6) mu
-  | t < 999e5  = printf "%.2f %cs" (t / 1e6) mu
-  | t < 999e6  = printf "%.1f %cs" (t / 1e6) mu
-  | t < 999e7  = printf "%.3f ms" (t / 1e9)
-  | t < 999e8  = printf "%.2f ms" (t / 1e9)
-  | t < 999e9  = printf "%.1f ms" (t / 1e9)
-  | t < 999e10 = printf "%.3f s " (t / 1e12)
-  | t < 999e11 = printf "%.2f s " (t / 1e12)
-  | t < 999e12 = printf "%.1f s " (t / 1e12)
-  | otherwise  = printf "%4.1f s" (t / 1e12)
+  | t < 10     = f $ printf "%.3f ps" t
+  | t < 100    = f $ printf "%.2f ps" t
+  | t < 1000   = f $ printf "%.1f ps" t
+  | t < 999e1  = f $ printf "%.3f ns" (t / 1e3)
+  | t < 999e2  = f $ printf "%.2f ns" (t / 1e3)
+  | t < 999e3  = f $ printf "%.1f ns" (t / 1e3)
+  | t < 999e4  = print_mu "%.3f %cs"
+  | t < 999e5  = print_mu "%.2f %cs"
+  | t < 999e6  = print_mu "%.1f %cs"
+  | t < 999e7  = f $ printf "%.3f ms" (t / 1e9)
+  | t < 999e8  = f $ printf "%.2f ms" (t / 1e9)
+  | t < 999e9  = f $ printf "%.1f ms" (t / 1e9)
+  | t < 999e10 = f $ printf "%.3f s " (t / 1e12)
+  | t < 999e11 = f $ printf "%.2f s " (t / 1e12)
+  | t < 999e12 = f $ printf "%.1f s " (t / 1e12)
+  | otherwise  = f $ printf "%4.1f s" (t / 1e12)
   where
     t = word64ToDouble i
+    f = fromString
+    print_mu fmt = Doc (printf fmt (t / 1e6) . mu)
 
-formatGC :: Measurement -> String
-formatGC (Measurement _ a c p)
-  | hasGCStats = "\n" ++
-    white "        alloc  copied    peak" ++ "\n" ++
-    white "gc     " ++ sb a ++ "  " ++ sb c ++ "  " ++ sb p
-  | otherwise = ""
-  where
-    sb = showBytes
+formatGC :: Measurement -> Doc
+formatGC (Measurement _ a c p) = Doc $ \ !e ->
+  let sb !b = fromString $! showBytes b
+  in  if meHasGCStats e then
+        docToString e $ "\n" <>
+        white "        alloc  copied    peak" <> "\n" <>
+        white "gc     " <> sb a <> "  " <> sb c <> "  " <> sb p
+      else
+        ""
 
 -- | Show bytes with unit.
 showBytes :: Word64 -> String
@@ -695,13 +722,14 @@ showBytes i
   where
     t = word64ToDouble i
 
-formatMeasurement :: Word64 -> Measurement -> String
-formatMeasurement n (Measurement t a c m) =
-  showPicos5 (t `quot` n) ++ printf " (%d/%d)" t n ++
-  if hasGCStats then
-    printf " alloc: %d copied: %d max: %d" a c m
+formatMeasurement :: MEnv -> Word64 -> Measurement -> Doc
+formatMeasurement menv n (Measurement t a c m) =
+  showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
+  if meHasGCStats menv then
+    fromString (printf " alloc: %d copied: %d max: %d" a c m)
   else
     ""
+
 
 -- ------------------------------------------------------------------------
 -- Matching benchmark names
@@ -772,41 +800,75 @@ glob pat0 = go pat0
 -- Terminal stuffs
 -- ------------------------------------------------------------------------
 
-red, yellow, white :: String -> String
-red      = coloredString "1;31"
-yellow   = coloredString "0;33"
-white    = coloredString "0;37"
+yellow, white :: Doc -> Doc
+yellow = coloredDoc "0;33"
+white = coloredDoc "0;37"
 
-boldGreen, boldYellow, boldCyan :: String -> String
-boldGreen  = coloredString "1;32"
-boldYellow = coloredString "1;33"
-boldCyan   = coloredString "1;36"
+boldRed, boldGreen, boldYellow, boldCyan :: Doc -> Doc
+boldRed = coloredDoc "1;31"
+boldGreen = coloredDoc "1;32"
+boldYellow = coloredDoc "1;33"
+boldCyan = coloredDoc "1;36"
 
-coloredString :: String -> String -> String
-coloredString param str
-  | isTerminalDevice = "\ESC[" ++ param ++ "m" ++ str ++ "\ESC[0m"
-  | otherwise = str
-
-isTerminalDevice :: Bool
-isTerminalDevice = unsafePerformIO (hIsTerminalDevice stdout)
-{-# NOINLINE isTerminalDevice #-}
+coloredDoc :: String -> Doc -> Doc
+coloredDoc !param (Doc !g) = Doc f
+  where
+    f !e
+      | meTerminalDevice e = "\ESC[" ++ param ++ "m" ++ g e ++ "\ESC[0m"
+      | otherwise = g e
+{-# INLINABLE coloredDoc #-}
 
 -- | Unit character for microseconds.
-mu :: Char
-mu = if hasUnicodeSupport then 'μ' else 'u'
+mu :: MEnv -> Char
+mu menv = if meSupportsUnicode menv then 'μ' else 'u'
+{-# INLINE mu #-}
 
-hasUnicodeSupport :: Bool
+isUnicodeSupported :: IO Bool
 #if MIN_VERSION_base(4,5,0)
-hasUnicodeSupport = take 3 (textEncodingName enc) == "UTF"
-#if defined(mingw32_HOST_OS)
-  && unsafePerformIO getConsoleOutputCP == 65001
-#endif
-  where
-    enc = unsafePerformIO getLocaleEncoding
+isUnicodeSupported = do
+  enc <- getLocaleEncoding
+  let utf_prefix = take 3 (textEncodingName enc) == "UTF"
+#  if defined(mingw32_HOST_OS)
+  is_65001 <- fmap (== 65001) getConsoleOutputCP
+  pure utf_prefix && is_65001
+#  else
+  pure utf_prefix
+#  endif
 #else
-hasUnicodeSupport = False
+  pure False
 #endif
-{-# NOINLINE hasUnicodeSupport #-}
+{-# INLINABLE isUnicodeSupported #-}
+
+
+-- ------------------------------------------------------------------------
+-- Terminal specific string
+-- ------------------------------------------------------------------------
+
+newtype Doc = Doc {unDoc :: MEnv -> String}
+
+instance Semigroup Doc where
+  Doc !d1 <> Doc !d2 = Doc (\ !e -> d1 e <> d2 e)
+  {-# INLINE (<>) #-}
+
+instance Monoid Doc where
+  mempty = Doc (const "")
+  {-# INLINE mempty #-}
+
+instance IsString Doc where
+  fromString = stringToDoc
+  {-# INLINE fromString #-}
+
+stringToDoc :: String -> Doc
+stringToDoc !str = Doc (\ !_ -> str)
+{-# INLINE stringToDoc #-}
+
+docToString :: MEnv -> Doc -> String
+docToString !menv !d = unDoc d menv
+{-# INLINE docToString #-}
+
+putDoc :: MEnv -> Doc -> IO ()
+putDoc !menv = putStr . docToString menv
+{-# INLINE putDoc #-}
 
 
 -- ------------------------------------------------------------------------
@@ -824,20 +886,20 @@ withCsvSettings menv0@MEnv{meConfig=cfg} act = do
     Nothing -> act menv1 {meCsvHandle = Nothing}
     Just path -> withFile path WriteMode $ \hdl -> do
       hSetBuffering hdl LineBuffering
-      let extras | hasGCStats = ",Allocated,Copied,Peak Memory"
+      let extras | meHasGCStats menv0 = ",Allocated,Copied,Peak Memory"
                  | otherwise = ""
           header = "Name,Mean,MeanLB,MeanUB,Stddev,StddevLB,StddevUB"
       hPutStrLn hdl (header ++ extras)
       act menv1 {meCsvHandle = Just hdl}
 
-putCsvLine :: String -> Maybe Summary -> Handle -> IO ()
-putCsvLine name mb_summary hdl =
-  let put_line s = hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary s)
+putCsvLine :: MEnv -> String -> Maybe Summary -> Handle -> IO ()
+putCsvLine menv name mb_summary hdl =
+  let put_line s = hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary menv s)
   in  maybe (pure ()) put_line mb_summary
 
-csvSummary :: Summary -> String
-csvSummary (Summary (Estimate m _) mean stdev _med _)
-  | hasGCStats = time ++ "," ++ gc
+csvSummary :: MEnv -> Summary -> String
+csvSummary menv (Summary (Estimate m _) mean stdev _med _)
+  | meHasGCStats menv = time ++ "," ++ gc
   | otherwise = time
   where
     time =
@@ -894,7 +956,7 @@ compareVsBaseline baseline name (Estimate m stdev) = fmap comp mb_old
 
 encodeCsv :: String -> String
 encodeCsv xs
-  | any (`elem` xs) ",\"\n\r" = '"' : go xs -- opening quote
+  | any (`elem` xs) (",\"\n\r" :: String) = '"' : go xs -- opening quote
   | otherwise = xs
   where
     go []         = ['"'] -- closing quote
@@ -1122,14 +1184,14 @@ getTimePicoSecs = \case
 -- Getting GC info
 -- ------------------------------------------------------------------------
 
-getAllocsAndCopied :: IO (Word64, Word64, Word64)
-getAllocsAndCopied =
+getAllocsAndCopied :: MEnv -> IO (Word64, Word64, Word64)
+getAllocsAndCopied menv =
 #if MIN_VERSION_base(4,10,0)
-  if not hasGCStats then pure (0, 0, 0) else
+  if not (meHasGCStats menv) then pure (0, 0, 0) else
     (\s -> (allocated_bytes s, copied_bytes s, max_mem_in_use_bytes s))
     <$> getRTSStats
 #elif MIN_VERSION_base(4,6,0)
-  if not hasGCStats then pure (0, 0, 0) else
+  if not (meHasGCStats menv) then pure (0, 0, 0) else
     (\s -> (int64ToWord64 $ bytesAllocated s,
             int64ToWord64 $ bytesCopied s,
             int64ToWord64 $ peakMegabytesAllocated s * 1024 * 1024))
@@ -1137,16 +1199,17 @@ getAllocsAndCopied =
 #else
     pure (0, 0, 0)
 #endif
+{-# INLINABLE getAllocsAndCopied #-}
 
-hasGCStats :: Bool
+getGCStatsEnabled :: IO Bool
 #if MIN_VERSION_base(4,10,0)
-hasGCStats = unsafePerformIO getRTSStatsEnabled
+getGCStatsEnabled = getRTSStatsEnabled
 #elif MIN_VERSION_base(4,6,0)
-hasGCStats = unsafePerformIO getGCStatsEnabled
+getGCStatsEnabled = getGCStatsEnabled
 #else
-hasGCStats = False
+getGCStatsEnabled = pure False
 #endif
-{-# NOINLINE hasGCStats #-}
+{-# INLINE getGCStatsEnabled #-}
 
 
 -- ------------------------------------------------------------------------
@@ -1272,17 +1335,17 @@ runLoop Benchmarkable{..} n f
     {-# INLINE comb #-}
 {-# INLINE runLoop #-}
 
-measure :: Config -> Word64 -> Benchmarkable -> IO Measured
-measure cfg num b =
+measure :: MEnv -> Word64 -> Benchmarkable -> IO Measured
+measure menv@MEnv{meConfig=cfg} num b =
   runLoop b num $ \ !n act -> do
     let getTimePicoSecs' = getTimePicoSecs (cfgTimeMode cfg)
     performMinorGC
     start_time <- getTimePicoSecs'
-    (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied
+    (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied menv
     act
     end_time <- getTimePicoSecs'
     performMinorGC
-    (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied
+    (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied menv
     let meas = Measurement
           { measTime = end_time - start_time
           , measAllocs = end_allocs - start_allocs
@@ -1290,16 +1353,16 @@ measure cfg num b =
           , measMaxMem = max end_max_mem start_max_mem
           }
 
-    debugStr cfg $
-      show n
-      ++ (if n == 1 then " iteration gives " else " iterations give ")
-      ++ formatMeasurement n meas ++ "\n"
+    debugStr menv $
+      fromString (show n)
+      <> (if n == 1 then " iteration gives " else " iterations give ")
+      <> formatMeasurement menv n meas <> "\n"
 
     pure (meas, end_time)
 
-measureUntil :: Config -> Benchmarkable -> IO Summary
-measureUntil cfg@Config{..} b
-  | is_once = fmap (measToSummary . fst) (measure cfg 1 b)
+measureUntil :: MEnv -> Benchmarkable -> IO Summary
+measureUntil menv@MEnv{meConfig=Config{..}} b
+  | is_once = fmap (measToSummary . fst) (measure menv 1 b)
   | otherwise = init_and_go
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
@@ -1307,11 +1370,11 @@ measureUntil cfg@Config{..} b
     init_and_go = do
       performGC
       start_time <- getTimePicoSecs cfgTimeMode
-      (m0, acc) <- initializeAcc cfg b
+      (m0, acc) <- initializeAcc menv b
       go start_time m0 acc
 
     go start_time m1 acc = do
-      (m2, end_time) <- measure cfg (acNumRepeats acc) b
+      (m2, end_time) <- measure menv (acNumRepeats acc) b
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           meanN = measTime measN
@@ -1365,9 +1428,9 @@ data Acc = Acc
   , acQueue      :: !(Queue Word64)
   }
 
-initializeAcc :: Config -> Benchmarkable -> IO (Measurement, Acc)
-initializeAcc cfg b = do
-  debugStr cfg "*** Starting initialization\n"
+initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
+initializeAcc menv b = do
+  debugStr menv "*** Starting initialization\n"
   go 1
   where
     -- Discarding Measurement data when the total duration is
@@ -1375,11 +1438,11 @@ initializeAcc cfg b = do
     -- imprecise and unreliable.
     threshold = precision * 30
     go n = do
-      meas@(Measurement t _ _ _) <- fmap fst (measure cfg n b)
+      meas@(Measurement t _ _ _) <- fmap fst (measure menv n b)
       if t < threshold
         then go (n * 2)
         else do
-          debugStr cfg "*** Initialization done\n"
+          debugStr menv "*** Initialization done\n"
           let t_scaled = t `quot` n
           pure ( meas
                , Acc { acNumRepeats = 2 * n
