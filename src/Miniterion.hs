@@ -62,7 +62,13 @@ module Miniterion
   , showBytes
   , mu
 
+  , Config
+  , defaultConfig
+
+  , MEnv
   , getDefaultMEnv
+
+  , Doc
   , docToString
 
   , Ranged(..)
@@ -354,8 +360,8 @@ defaultMainWith cfg0 bs = handleMiniterionException $ do
   args <- getArgs
   let (opts, pats, invalids, errs) = getOpt' Permute options args
       cfg1 = foldl' (flip id) cfg0 opts
-  default_menv <- getDefaultMEnv
-  let menv0 = default_menv {mePatterns = pats, meConfig = cfg1}
+  default_menv <- getDefaultMEnv cfg1
+  let menv0 = default_menv {mePatterns = pats}
       root_bs = bgroup "" bs
       do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
       do_bench menv = runBenchmark menv root_bs >>= summariseResults
@@ -424,7 +430,7 @@ data MEnv = MEnv
   , meBaselineSet     :: !Baseline
     -- ^ Set containing baseline information, made from the file
     -- specified by 'cfgBaselinePath'.
-  , meTerminalDevice  :: !Bool
+  , meUseColor        :: !Bool
     -- ^ 'True' if the output is a terminal device.
   , meSupportsUnicode :: !Bool
     -- ^ 'True' if unicode is supported.
@@ -439,18 +445,23 @@ defaultMEnv = MEnv
   , meBaselineSet = mempty
   , mePatterns = []
   , meConfig = defaultConfig
-  , meTerminalDevice = False
+  , meUseColor = False
   , meSupportsUnicode = False
   , meHasGCStats = False
   }
 
-getDefaultMEnv :: IO MEnv
-getDefaultMEnv = do
-  is_terminal_device <- hIsTerminalDevice stdout
+-- | Get the default t'MEnv' from given t'Config'.
+getDefaultMEnv :: Config -> IO MEnv
+getDefaultMEnv !cfg = do
+  use_color <- case cfgUseColor cfg of
+    Always -> pure True
+    Never  -> pure False
+    Auto   -> hIsTerminalDevice stdout
   supports_unicode <- isUnicodeSupported
   has_gc_stats <- getGCStatsEnabled
-  pure defaultMEnv
-    { meTerminalDevice = is_terminal_device
+  pure $! defaultMEnv
+    { meConfig = cfg
+    , meUseColor = use_color
     , meSupportsUnicode = supports_unicode
     , meHasGCStats = has_gc_stats
     }
@@ -528,6 +539,7 @@ runBenchmarkable menv@MEnv {meConfig=cfg} parents name b = do
   infoBenchname menv fullname
   debugStr menv "\n"
   hFlush stdout
+
   mb_sum <- withTimeout (cfgTimeout cfg) (measureUntil menv b)
 
   let upper = 1 + cfgFailIfSlower cfg
@@ -814,7 +826,7 @@ coloredDoc :: String -> Doc -> Doc
 coloredDoc !param (Doc !g) = Doc f
   where
     f !e
-      | meTerminalDevice e = "\ESC[" ++ param ++ "m" ++ g e ++ "\ESC[0m"
+      | meUseColor e = "\ESC[" ++ param ++ "m" ++ g e ++ "\ESC[0m"
       | otherwise = g e
 {-# INLINABLE coloredDoc #-}
 
@@ -844,6 +856,8 @@ isUnicodeSupported = do
 -- Terminal specific string
 -- ------------------------------------------------------------------------
 
+-- | Newtype wrapper for 'String' taking t'MEnv', to decide whether to
+-- use color and unicode.
 newtype Doc = Doc {unDoc :: MEnv -> String}
 
 instance Semigroup Doc where
@@ -858,14 +872,17 @@ instance IsString Doc where
   fromString = stringToDoc
   {-# INLINE fromString #-}
 
+-- | Lift given 'String' to t'Doc'.
 stringToDoc :: String -> Doc
 stringToDoc !str = Doc (\ !_ -> str)
 {-# INLINE stringToDoc #-}
 
+-- | Convert t'Doc' to 'String'.
 docToString :: MEnv -> Doc -> String
 docToString !menv !d = unDoc d menv
 {-# INLINE docToString #-}
 
+-- | Like 'putStr', but for t'Doc'.
 putDoc :: MEnv -> Doc -> IO ()
 putDoc !menv = putStr . docToString menv
 {-# INLINE putDoc #-}
@@ -970,8 +987,10 @@ encodeCsv xs
 
 -- | Data type to hold configuration information.
 data Config = Config
-  { cfgRunMode      :: RunMode
+  { cfgRunMode      :: !RunMode
     -- ^ Mode to run the main program.
+  , cfgUseColor     :: !UseColor
+    -- ^ When to use colored outputs.
   , cfgBaselinePath :: Maybe FilePath
     -- ^ Path to a file containing baseline data, usually a CSV file
     -- made with @--csv@ option in advance.
@@ -981,15 +1000,15 @@ data Config = Config
     -- ^ Upper bound of acceptable speed up.
   , cfgFailIfSlower :: Double
     -- ^ Upper bound of acceptable slow down.
-  , cfgMatch        :: MatchMode
+  , cfgMatch        :: !MatchMode
     -- ^ Which mode to use for benchmark name pattern match.
-  , cfgRelStDev     :: Double
+  , cfgRelStDev     :: !Double
     -- ^ Relative standard deviation for measuring benchmarks.
-  , cfgTimeMode     :: TimeMode
+  , cfgTimeMode     :: !TimeMode
     -- ^ Time mode for measuring benchmarks.
-  , cfgTimeout      :: Timeout
+  , cfgTimeout      :: !Timeout
     -- ^ Timeout duration in seconds.
-  , cfgVerbosity    :: Int
+  , cfgVerbosity    :: !Int
     -- ^ Verbosity level.
   }
 
@@ -1001,10 +1020,17 @@ data RunMode
   | DoIter Word64 -- ^ Run benchmarks, don't analyse.
   | DoBench       -- ^ Run benchmarks.
 
+-- | When to use colored output.
+data UseColor
+  = Always -- ^ Always use color.
+  | Auto   -- ^ Use color if the output is a terminal device.
+  | Never  -- ^ Don't use color.
+
 -- | Default configuration used for running benchmarks.
 defaultConfig :: Config
 defaultConfig = Config
   { cfgRunMode = DoBench
+  , cfgUseColor = Auto
   , cfgBaselinePath = Nothing
   , cfgCsvPath = Nothing
   , cfgFailIfFaster = 1.0 / 0.0
@@ -1027,9 +1053,23 @@ options =
                 Just n -> o {cfgTimeout = Timeout (floor (1e6 * n))}
                 _      -> throw (InvalidArgument "time-limit" str))
       "SECS")
+
     (unlines
       ["Time limit to run a benchmark"
       ,"(default: no timeout)"])
+
+    , Option [] ["color"]
+      (let whens = [("always", Always)
+                   ,("auto", Auto)
+                   ,("never", Never)]
+           match str = isPrefixOf str . fst
+       in  ReqArg (\str o -> case find (match str) whens of
+                      Just (_, uc) -> o {cfgUseColor = uc}
+                      _            -> throw (InvalidArgument "color" str))
+           "WHEN")
+      (unlines
+       ["When to use colors, \"auto\", \"always\", or \"never\""
+       ,"(default: auto)"])
 
   , Option [] ["baseline"]
     (ReqArg (\str o -> o {cfgBaselinePath = Just str})
@@ -1103,7 +1143,7 @@ options =
      in  ReqArg (\str o -> case find (match str) modes of
                     Just (_, mode) -> o {cfgMatch = mode}
                     _              -> throw (InvalidArgument "match" str))
-      "MODE")
+         "MODE")
     (unlines
      ["How to match benchmark names (\"prefix\", \"glob\","
      ,"\"pattern\" (substring), or \"ipattern\")"])

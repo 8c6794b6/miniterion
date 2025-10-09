@@ -439,7 +439,7 @@ formatPicos = testGroup "format picos"
       assertPicos 123456 "123.5 ns"
 
   , testCase "micro seconds" $ do
-      e <- getDefaultMEnv
+      e <- getDefaultMEnv defaultConfig
       assertPicos 1234567 ("1.235 " ++ [mu e] ++ "s")
       assertPicos 12345678 ("12.35 " ++ [mu e] ++ "s")
       assertPicos 123456789 ("123.5 " ++ [mu e] ++ "s")
@@ -457,7 +457,7 @@ formatPicos = testGroup "format picos"
   ]
   where
     assertPicos n str = do
-      menv <- getDefaultMEnv
+      menv <- getDefaultMEnv defaultConfig
       let picos = docToString menv (showPicos5 n)
       assertEqual (show n) str picos
 
