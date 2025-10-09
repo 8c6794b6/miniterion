@@ -601,7 +601,7 @@ benchNames = go
       Environment _ _ f -> go acc (f (throw (UninitializedEnv acc)))
 
 pathToName :: [String] -> String -> String
-pathToName prevs me = foldl' (\b a -> a ++ "/" ++ b) me prevs
+pathToName !prevs !me = foldl' (\b a -> a ++ "/" ++ b) me prevs
 {-# INLINABLE pathToName #-}
 
 groupsToName :: [String] -> String
@@ -610,7 +610,7 @@ groupsToName = \case
   hd:tl -> pathToName tl hd
 
 consNonNull :: String -> [String] -> [String]
-consNonNull x xs = if null x then xs else x : xs
+consNonNull !x !xs = if null x then xs else x : xs
 
 noop :: Applicative m => a -> m ()
 noop = const (pure ())
@@ -1477,7 +1477,7 @@ initializeAcc menv b = do
     -- shorter than threshold. Too short measurement is considered
     -- imprecise and unreliable.
     threshold = precision * 30
-    go n = do
+    go !n = do
       meas@(Measurement t _ _ _) <- fmap fst (measure menv n b)
       if t < threshold
         then go (n * 2)
@@ -1614,7 +1614,7 @@ emptyQueue max_size = Queue max_size 0 [] []
 -- | Add new element to the last of queue. If the queue is full,
 -- remove the first element.
 enqueue :: a -> Queue a -> Queue a
-enqueue y q@(Queue max_size n xs ys)
+enqueue !y q@(Queue max_size n xs ys)
   | n < max_size = Queue max_size (n+1) xs (y:ys)
   | Just (_, Queue _ _ xs' ys') <- dequeue q = Queue max_size n xs' (y:ys')
   | otherwise = error "enqueue: internal error"
