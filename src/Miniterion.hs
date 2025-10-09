@@ -520,7 +520,7 @@ iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
 
 runBenchmarkWith :: (MEnv -> [String] -> String -> Benchmarkable -> IO a)
                  -> MEnv -> Benchmark -> IO [a]
-runBenchmarkWith run menv = go []
+runBenchmarkWith !run menv = go []
   where
     go acc0 bnch = case bnch of
       Bench name act -> pure <$> run menv acc0 name act
