@@ -1471,16 +1471,22 @@ data Acc = Acc
 initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
 initializeAcc menv b = do
   debugStr menv "*** Starting initialization\n"
-  go 1
+  go 0 1
   where
-    -- Discarding Measurement data when the total duration is
-    -- shorter than threshold. Too short measurement is considered
-    -- imprecise and unreliable.
     threshold = precision * 30
-    go !n = do
+    {-# INLINE threshold #-}
+
+    go :: Word64 -> Word64 -> IO (Measurement, Acc)
+    go !i !n = do
       meas@(Measurement t _ _ _) <- fmap fst (measure menv n b)
-      if t < threshold
-        then go (n * 2)
+      -- Discarding Measurement data when the total duration is
+      -- shorter than threshold. Too short measurement is considered
+      -- imprecise and unreliable. When the total duration is less
+      -- than 2 * threshold and iteration is less than twice,
+      -- considering that the warming up is not enough, running the
+      -- measurement again.
+      if t < threshold || (i < 2 && t < threshold * 2)
+        then go (i + 1) (n * 2)
         else do
           debugStr menv "*** Initialization done\n"
           let t_scaled = t `quot` n
@@ -1488,6 +1494,7 @@ initializeAcc menv b = do
                , Acc { acNumRepeats = 2 * n
                      , acQueue = enqueue t_scaled defaultQueue
                      })
+    {-# INLINE go #-}
 
 summarize :: Acc -> Measurement -> Measurement -> Estimate -> Summary
 summarize ac m1 m2 (Estimate measN _stdevN) =
