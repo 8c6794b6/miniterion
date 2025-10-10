@@ -73,12 +73,6 @@ module Miniterion
 
   , Ranged(..)
   , fitInRange
-
-  , Queue(..)
-  , defaultQueue
-  , enqueue
-  , dequeue
-  , toList
 #endif
   ) where
 
@@ -91,7 +85,7 @@ import           Data.Char             (toLower)
 import           Data.Foldable         (find)
 import           Data.Int              (Int64)
 import           Data.List             (isPrefixOf, nub, sort, stripPrefix,
-                                        tails, unfoldr)
+                                        tails)
 import           Data.String           (IsString (..))
 import           Data.Word             (Word64)
 import           GHC.Clock             (getMonotonicTime)
@@ -1413,7 +1407,7 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       (m0, acc) <- initializeAcc menv b
       go start_time m0 acc
 
-    go start_time m1 acc = do
+    go start_time m1 !acc = do
       (m2, end_time) <- measure menv (acNumRepeats acc) b
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
@@ -1464,8 +1458,8 @@ warnOnTooLongBenchmark tout t_start t_now =
 -- ------------------------------------------------------------------------
 
 data Acc = Acc
-  { acNumRepeats :: !Word64
-  , acQueue      :: !(Queue Word64)
+  { acNumRepeats :: {-# UNPACK #-} !Word64
+  , acMeans      :: {-# UNPACK #-} ![Word64]
   }
 
 initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
@@ -1492,7 +1486,7 @@ initializeAcc menv b = do
           let t_scaled = t `quot` n
           pure ( meas
                , Acc { acNumRepeats = 2 * n
-                     , acQueue = enqueue t_scaled defaultQueue
+                     , acMeans = t_scaled !: []
                      })
     {-# INLINE go #-}
 
@@ -1506,18 +1500,17 @@ summarize ac m1 m2 (Estimate measN _stdevN) =
       stdevs = map scale (predictStdevs m1 m2)
       stdev = sum stdevs `quot` 4
       (stdev_min, stdev_max) = minMax stdevs
-      -- The queue contains scaled measurement values, each value is
-      -- computed from twice the number of repeats than the previous
-      -- value.
-      queue = enqueue mean_m2 (acQueue ac)
-      (ys, ns) = (toList queue, iterate (* 2) 1)
+      -- The list contains normalized measurement values, each value
+      -- is computed from twice the number of repeats than the
+      -- previous value.
+      (ys, ns) = (reverse (mean_m2 !: acMeans ac), iterate (* 2) 1)
       ys_and_ns = zipWith (\y n -> (fromIntegral y * n, n)) ys ns
       (mean_min, mean_max) = minMax ys
       r_squared = computeRSquared mean_scaled mean_min mean_max ys_and_ns
   in  Summary { smEstimate = Estimate meas stdev
               , smMean = Ranged mean_min mean_scaled mean_max
               , smStdev = Ranged stdev_min stdev stdev_max
-              , smMedian = computeMedian queue
+              , smMedian = computeMedian ys (length ys)
               , smRSquared = r_squared
               }
 {-# INLINE summarize #-}
@@ -1526,7 +1519,7 @@ updateForNextRun :: Acc -> Measurement -> Acc
 updateForNextRun ac m =
   let mean = measTime m `quot` acNumRepeats ac
   in  ac { acNumRepeats = acNumRepeats ac * 2
-         , acQueue = enqueue mean (acQueue ac)
+         , acMeans = mean !: acMeans ac
          }
 {-# INLINE updateForNextRun #-}
 
@@ -1535,6 +1528,11 @@ minMax = foldr f (maxBound, minBound)
   where
     f x (amin, amax) = (min amin x, max amax x)
 {-# INLINABLE minMax #-}
+
+-- Apply bang pattern to the first argument, then (:).
+(!:) :: a -> [a] -> [a]
+!x !: xs = x : xs
+{-# INLINE (!:) #-}
 
 
 -- ------------------------------------------------------------------------
@@ -1565,19 +1563,16 @@ toRanged x = Ranged x x x
 -- Median and R² computed from last k elements
 -- ------------------------------------------------------------------------
 
--- Median and R² are computed from last @k@ measurements (or less if
--- the benchmark terminate earlier). Currently the value of k is hard
--- coded to 63.
-
 -- | Get the median value from given queue.
-computeMedian :: Queue Word64 -> Median
-computeMedian q@(Queue _ size _ _) = Ranged lo mid hi
+computeMedian :: [Word64] -> Int -> Median
+computeMedian means size = Ranged lo mid hi
   where
-    xs = sort (toList q)
+    xs = sort means
     (lo, mid, hi)
       | size < 3, x:_ <- xs = (x,x,x)
-      | otherwise = let i = fromIntegral (size `div` 2)
-                    in (xs!!(i-1), xs!!i, xs!!(i+1))
+      | otherwise = let i = size `div` 2
+                    in  (xs!!(i-1), xs!!i, xs!!(i+1))
+
 {-# INLINABLE computeMedian #-}
 
 -- | Compute coefficient of determination from means and a list of
@@ -1593,53 +1588,6 @@ computeRSquared e1 e2 e3 ys_and_xs =
       rsq e = 1 - (sse e / sst)
   in  fitInRange (rsq e1) (rsq e2) (rsq e3)
 {-# INLINABLE computeRSquared #-}
-
-
--- ------------------------------------------------------------------------
--- Size limited queue
--- ------------------------------------------------------------------------
-
--- | Size limited queue, to support FIFO operations.
---
--- When the number of elements reaches to the limit, the first element
--- will be removed.
-data Queue a = Queue
-  {-# UNPACK #-} !Word -- ^ Maximum size
-  {-# UNPACK #-} !Word -- ^ Current size
-  [a] -- ^ Front elements
-  [a] -- ^ Rear elements in reversed order
-
--- | Empty queue with maximum 63 elements.
-defaultQueue :: Queue a
-defaultQueue = emptyQueue 63
-{-# INLINABLE defaultQueue #-}
-
-emptyQueue :: Word -> Queue a
-emptyQueue max_size = Queue max_size 0 [] []
-{-# INLINABLE emptyQueue #-}
-
--- | Add new element to the last of queue. If the queue is full,
--- remove the first element.
-enqueue :: a -> Queue a -> Queue a
-enqueue !y q@(Queue max_size n xs ys)
-  | n < max_size = Queue max_size (n+1) xs (y:ys)
-  | Just (_, Queue _ _ xs' ys') <- dequeue q = Queue max_size n xs' (y:ys')
-  | otherwise = error "enqueue: internal error"
-{-# INLINABLE enqueue #-}
-
--- | 'Just' the first element of the queue and the rest, or 'Nothing'.
-dequeue :: Queue a -> Maybe (a, Queue a)
-dequeue q = case q of
-  Queue _ _ [] []            -> Nothing
-  Queue max_size n (x:xs) ys -> Just (x, Queue max_size (n-1) xs ys)
-  Queue max_size n [] ys     -> dequeue (Queue max_size n (reverse ys) [])
-{-# INLINABLE dequeue #-}
-
--- | Convert queue to list. The first element of the queue is the head
--- of the list.
-toList :: Queue a -> [a]
-toList = unfoldr dequeue
-{-# INLINABLE toList #-}
 
 
 -- ------------------------------------------------------------------------

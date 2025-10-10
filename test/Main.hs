@@ -45,7 +45,6 @@ main = Test.Tasty.defaultMain $
   , formatPicos
   , formatBytes
   , ranged
-  , sizeLimitedQueue
 #endif
   ]
 
@@ -515,27 +514,6 @@ ranged = testGroup "ranged values"
           x:_ -> x
           _   -> error "assertRanged: duplicated value"
       assertEqual "irHi" (irHi r) max_abc
-
-sizeLimitedQueue :: TestTree
-sizeLimitedQueue = testGroup "size limited queue"
-  [ testCase "first in first out" $ do
-      let x = 12345 :: Int
-          q = enqueue 3 (enqueue 2 (enqueue x defaultQueue))
-      Just (popped, _) <- pure (dequeue q)
-      assertEqual "first element" x popped
-
-  , testCase "size is limited" $ do
-      let q = foldr enqueue defaultQueue [1..100::Int]
-          xs = toList q
-          Queue max_size _ _ _ = q
-      assertEqual "size of queue" (fromIntegral max_size) (length xs)
-
-  , testCase "pop from over-sized queue" $ do
-      let Queue max_size _ _ _ = defaultQueue
-          q = foldl' (flip enqueue) defaultQueue [1,2..(max_size + 1)]
-      Just (popped,_) <- pure (dequeue q)
-      assertEqual "second element" 2 popped
-  ]
 #endif
 
 
