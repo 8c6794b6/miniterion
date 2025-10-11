@@ -516,7 +516,7 @@ runBenchmarkWith :: (MEnv -> [String] -> String -> Benchmarkable -> IO a)
                  -> MEnv -> Benchmark -> IO [a]
 runBenchmarkWith !run menv = go []
   where
-    go acc0 bnch = case bnch of
+    go !acc0 bnch = case bnch of
       Bench name act -> pure <$> run menv acc0 name act
       Bgroup name bs ->
         let acc1 = consNonNull name acc0
@@ -527,27 +527,26 @@ runBenchmarkWith !run menv = go []
         in  bracket alloc' clean (go acc0 . f)
 
 runBenchmarkable :: MEnv -> [String] -> String -> Benchmarkable -> IO Result
-runBenchmarkable menv@MEnv {meConfig=cfg} parents name b = do
+runBenchmarkable menv@MEnv {meConfig=Config{..}} parents name b = do
   let fullname = pathToName parents name
 
   infoBenchname menv fullname
   debugStr menv "\n"
   hFlush stdout
 
-  mb_sum <- withTimeout (cfgTimeout cfg) (measureUntil menv b)
+  mb_sum <- withTimeout cfgTimeout (measureUntil menv b)
 
-  let upper = 1 + cfgFailIfSlower cfg
-      lower = 1 - cfgFailIfFaster cfg
-      is_acceptable cmp
-        | upper <= cmp = TooSlow fullname
-        | cmp <= lower = TooFast fullname
-        | otherwise = Done
-      (result, mb_cmp) = case mb_sum of
+  let (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary est _ _ _ _) ->
           case compareVsBaseline (meBaselineSet menv) fullname est of
             Nothing  -> (Done, Nothing)
-            Just cmp -> (is_acceptable cmp, Just cmp)
+            Just cmp ->
+              let is_acceptable
+                    | 1 + cfgFailIfSlower <= cmp = TooSlow fullname
+                    | cmp <= 1 - cfgFailIfFaster = TooFast fullname
+                    | otherwise                  = Done
+              in  (is_acceptable, Just cmp)
 
   infoStr menv (formatResult result mb_sum mb_cmp)
   mapM_ (putCsvLine menv fullname mb_sum) (meCsvHandle menv)
@@ -557,13 +556,14 @@ iterBenchmarkable :: Word64 -> MEnv -> [String] -> String -> Benchmarkable
                   -> IO Result
 iterBenchmarkable n menv@MEnv{meConfig=cfg} parents name Benchmarkable{..} = do
   let fullname = pathToName parents name
-      run i =
-        bracket (allocEnv i) (cleanEnv i) (\e -> runRepeatedly e i)
       -- Repeating the `run 1' when the perRun field of the benchmark
       -- is True, to initialize and cleanup the environment every
       -- time.
       go | perRun    = replicateM_ (fromIntegral n) (run 1)
          | otherwise = run n
+        where
+          run i =
+            bracket (allocEnv i) (cleanEnv i) (`runRepeatedly` i)
 
   infoBenchname menv fullname
   hFlush stdout
@@ -589,14 +589,13 @@ withTimeout tout act = case tout of
 benchNames :: [String] -> Benchmark -> [String]
 benchNames = go
   where
-    go acc b = case b of
+    go !acc b = case b of
       Bench name _      -> [pathToName acc name]
       Bgroup name bs    -> concatMap (go (consNonNull name acc)) bs
       Environment _ _ f -> go acc (f (throw (UninitializedEnv acc)))
 
 pathToName :: [String] -> String -> String
 pathToName !prevs !me = foldl' (\b a -> a ++ "/" ++ b) me prevs
-{-# INLINABLE pathToName #-}
 
 groupsToName :: [String] -> String
 groupsToName = \case
