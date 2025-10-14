@@ -700,13 +700,13 @@ showPicos5 i
 
 formatGC :: Measurement -> Doc
 formatGC (Measurement _ a c p) = Doc $ \ !e ->
-  let sb !b = fromString $! showBytes b
-  in  if meHasGCStats e then
-        docToString e $ "\n" <>
+  if meHasGCStats e then
+    let sb !b = fromString $! showBytes b
+    in  docToString e $ "\n" <>
         white "        alloc  copied    peak" <> "\n" <>
         white "gc     " <> sb a <> "  " <> sb c <> "  " <> sb p
-      else
-        ""
+  else
+    ""
 
 -- | Show bytes with unit.
 showBytes :: Word64 -> String
@@ -747,9 +747,8 @@ data MatchMode
   | Glob -- ^ Glob pattern match
 
 isMatched :: MEnv -> String -> Bool
-isMatched MEnv{..} fullname = no_pat || has_match
+isMatched MEnv{..} fullname = null mePatterns || has_match
   where
-    no_pat = null mePatterns
     has_match = any is_match mePatterns
     is_match str = case cfgMatch meConfig of
       Glob     -> glob str fullname
@@ -1482,19 +1481,18 @@ initializeAcc menv b = do
         then go (i + 1) (n * 2)
         else do
           debugStr menv "*** Initialization done\n"
-          let t_scaled = t `quot` n
           pure ( meas
                , Acc { acNumRepeats = 2 * n
-                     , acMeans = t_scaled !: []
+                     , acMeans = (t `quot` n) !: []
                      })
     {-# INLINE go #-}
 
 summarize :: Acc -> Measurement -> Measurement -> Estimate -> Summary
 summarize ac m1 m2 (Estimate measN _stdevN) =
   let Measurement meanN allocN copiedN maxMemN = measN
+      scale = (`quot` (acNumRepeats ac `quot` 2))
       mean_scaled = scale meanN
       meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
-      scale = (`quot` (acNumRepeats ac `quot` 2))
       mean_m2 = measTime m2 `quot` acNumRepeats ac
       stdevs = map scale (predictStdevs m1 m2)
       stdev = sum stdevs `quot` 4
@@ -1516,10 +1514,9 @@ summarize ac m1 m2 (Estimate measN _stdevN) =
 
 updateForNextRun :: Acc -> Measurement -> Acc
 updateForNextRun ac m =
-  let mean = measTime m `quot` acNumRepeats ac
-  in  ac { acNumRepeats = acNumRepeats ac * 2
-         , acMeans = mean !: acMeans ac
-         }
+  ac { acNumRepeats = acNumRepeats ac * 2
+     , acMeans = (measTime m `quot` acNumRepeats ac) !: acMeans ac
+     }
 {-# INLINE updateForNextRun #-}
 
 minMax :: [Word64] -> (Word64, Word64)
