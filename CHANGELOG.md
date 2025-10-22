@@ -2,15 +2,16 @@
 
 ## Unreleased
 
-* Show R², median, and min/max values in benchmark results.
+* Show time from OLS linear regression, R², and range values in
+  benchmark results.
 
 * Modify CSV format to follow the template used in Criterion.
 
-* Discared measurement results when its total duration shorter than
+* Discard measurement results when the total duration is shorter than
   threshold during batch benchmark initialization.
 
-* Modify time out detection to refer benchmark start and end time
-  instead of sum of the measurement durations.
+* Modify timeout detection to refer to the benchmark start and end
+  time instead of the sum of the measurement durations.
 
 * Support brace expressions in glob.
 

@@ -44,7 +44,6 @@ main = Test.Tasty.defaultMain $
 #ifdef DEV
   , formatPicos
   , formatBytes
-  , ranged
 #endif
   ]
 
@@ -491,29 +490,6 @@ formatBytes = testGroup "format bytes"
   ]
   where
     assertBytes n str = assertEqual (show n) str (showBytes n)
-
-ranged :: TestTree
-ranged = testGroup "ranged values"
-  [ testCase "fit a < b < c" $ assertRanged 1 2 3
-  , testCase "fit a < c < b" $ assertRanged 1 3 2
-  , testCase "fit b < a < c" $ assertRanged 2 1 3
-  , testCase "fit b < c < a" $ assertRanged 3 1 2
-  , testCase "fit c < a < b" $ assertRanged 2 3 1
-  , testCase "fit c < b < a" $ assertRanged 3 2 1
-  ]
-  where
-    assertRanged :: Int -> Int -> Int -> Assertion
-    assertRanged a b c = do
-      let r = fitInRange a b c
-          abc = [a,b,c]
-          min_abc = minimum abc
-          max_abc = maximum abc
-      assertEqual "irLo" (irLo r) min_abc
-      assertEqual "irMid" (irMid r) $
-        case filter (\x -> x /= min_abc && x /= max_abc) abc of
-          x:_ -> x
-          _   -> error "assertRanged: duplicated value"
-      assertEqual "irHi" (irHi r) max_abc
 #endif
 
 

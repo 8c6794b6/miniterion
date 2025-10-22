@@ -70,9 +70,6 @@ module Miniterion
 
   , Doc
   , docToString
-
-  , Ranged(..)
-  , fitInRange
 #endif
   ) where
 
@@ -84,8 +81,7 @@ import           Control.Monad         (guard, replicateM_, void, when)
 import           Data.Char             (toLower)
 import           Data.Foldable         (find)
 import           Data.Int              (Int64)
-import           Data.List             (isPrefixOf, nub, sort, stripPrefix,
-                                        tails)
+import           Data.List             (isPrefixOf, nub, stripPrefix, tails)
 import           Data.String           (IsString (..))
 import           Data.Word             (Word64)
 import           GHC.Clock             (getMonotonicTime)
@@ -634,22 +630,22 @@ formatResult _ Nothing _ =
 formatResult res (Just summary) mb_cmp =
   fail_or_blank <> "\n" <>
   --
-  white "mean                 " <> showPicos5 (measTime m) <> "   " <>
-  show_minmax (irLo mean) (irHi mean) <>
+  white "time                 " <> showPicos5 (irMid ols)   <> "   " <>
+  show_minmax (irLo ols) (irHi ols) <>
   maybe "" (formatSlowDown res) mb_cmp <> "\n" <>
   --
   id    "                     " <> rsq_str id (irMid rsq) <> "   " <>
   show_minmax_rsq <> "\n" <>
   --
-  white "median               " <> showPicos5 (irMid med) <> "   " <>
-  show_minmax (irLo med) (irHi med) <> "\n" <>
+  white "mean                 " <> showPicos5 (measTime m) <> "   " <>
+  show_minmax (irLo mean) (irHi mean) <> "\n" <>
   --
-  white "std dev              " <> showPicos5 (2 * irMid stdev) <> "   " <>
-  show_minmax (2 * irLo stdev) (2 * irHi stdev) <>
+  white "std dev              " <> showPicos5 (2 * irMid sd) <> "   " <>
+  show_minmax (2 * irLo sd) (2 * irHi sd) <>
   --
   formatGC m <> "\n\n"
   where
-    Summary (Estimate m _) mean stdev med rsq = summary
+    Summary (Estimate m _) ols rsq sd mean = summary
     fail_or_blank
       | isTooFast res || isTooSlow res = boldRed "FAIL"
       | otherwise = ""
@@ -907,7 +903,7 @@ putCsvLine menv name mb_summary hdl =
   in  maybe (pure ()) put_line mb_summary
 
 csvSummary :: MEnv -> Summary -> String
-csvSummary menv (Summary (Estimate m _) mean stdev _med _)
+csvSummary menv (Summary (Estimate m _) _ols _rsq stdev mean)
   | meHasGCStats menv = time ++ "," ++ gc
   | otherwise = time
   where
@@ -1269,17 +1265,17 @@ data Estimate = Estimate
   , estStdev :: {-# UNPACK #-} !Word64 -- ^ stdev in picoseconds
   }
 
+type OLS = Ranged Word64
+type RSquared = Ranged Double
 type Mean = Ranged Word64
 type Stdev = Ranged Word64
-type Median = Ranged Word64
-type RSquared = Ranged Double
 
 data Summary = Summary
   { smEstimate :: {-# UNPACK #-} !Estimate
-  , smMean     :: {-# UNPACK #-} !Mean
-  , smStdev    :: {-# UNPACK #-} !Stdev
-  , smMedian   :: {-# UNPACK #-} !Median
+  , smOLS      :: {-# UNPACK #-} !OLS
   , smRSquared :: {-# UNPACK #-} !RSquared
+  , smStdev    :: {-# UNPACK #-} !Stdev
+  , smMean     :: {-# UNPACK #-} !Mean
   }
 
 sqr :: Num a => a -> a
@@ -1312,16 +1308,6 @@ predictPerturbed t1 t2 = Estimate
     lo meas | measTime meas > precision =
               meas { measTime = measTime meas - precision }
             | otherwise = meas { measTime = 0 }
-
-predictStdevs :: Measurement -> Measurement -> [Word64]
-predictStdevs t1 t2 = map estStdev [v1,v2,v3,v4]
-  where
-    v1 = predict (lo t1) (lo t2)
-    v2 = predict (lo t1) (hi t2)
-    v3 = predict (hi t1) (lo t2)
-    v4 = predict (hi t1) (hi t2)
-    lo m = m { measTime = measTime m - precision }
-    hi m = m { measTime = measTime m + precision }
 
 precision :: Word64
 precision = max (fromInteger cpuTimePrecision) oneMillisecond
@@ -1386,9 +1372,9 @@ measure menv@MEnv{meConfig=cfg} num b =
           }
 
     debugStr menv $
-      fromString (show n)
-      <> (if n == 1 then " iteration gives " else " iterations give ")
-      <> formatMeasurement menv n meas <> "\n"
+      fromString (show n) <>
+      (if n == 1 then " iteration gives " else " iterations give ") <>
+      formatMeasurement menv n meas <> "\n"
 
     pure (meas, end_time)
 
@@ -1418,8 +1404,8 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       warnOnTooLongBenchmark cfgTimeout start_time end_time
 
       if is_stdev_in_target_range || is_timeout_soon
-        then pure $ summarize acc m1 m2 est
-        else go start_time m2 (updateForNextRun acc m2)
+        then pure $ summarize acc m2 est
+        else go start_time m2 (updateForNextRun acc stdevN m2)
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq
@@ -1458,6 +1444,7 @@ warnOnTooLongBenchmark tout t_start t_now =
 data Acc = Acc
   { acNumRepeats :: {-# UNPACK #-} !Word64
   , acMeans      :: {-# UNPACK #-} ![Word64]
+  , acStdevs     :: {-# UNPACK #-} ![Word64]
   }
 
 initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
@@ -1484,38 +1471,49 @@ initializeAcc menv b = do
           pure ( meas
                , Acc { acNumRepeats = 2 * n
                      , acMeans = (t `quot` n) !: []
+                     , acStdevs = []
                      })
     {-# INLINE go #-}
 
-summarize :: Acc -> Measurement -> Measurement -> Estimate -> Summary
-summarize ac m1 m2 (Estimate measN _stdevN) =
+summarize :: Acc -> Measurement -> Estimate -> Summary
+summarize ac m2 (Estimate measN stdevN) =
   let Measurement meanN allocN copiedN maxMemN = measN
       scale = (`quot` (acNumRepeats ac `quot` 2))
       mean_scaled = scale meanN
       meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
+
+      -- The list 'acMeans ac' contains normalized measurement values.
       mean_m2 = measTime m2 `quot` acNumRepeats ac
-      stdevs = map scale (predictStdevs m1 m2)
-      stdev = sum stdevs `quot` 4
-      (stdev_min, stdev_max) = minMax stdevs
-      -- The list contains normalized measurement values, each value
-      -- is computed from twice the number of repeats than the
-      -- previous value.
-      (ys, ns) = (reverse (mean_m2 !: acMeans ac), iterate (* 2) 1)
-      ys_and_ns = zipWith (\y n -> (fromIntegral y * n, n)) ys ns
-      (mean_min, mean_max) = minMax ys
-      r_squared = computeRSquared mean_scaled mean_min mean_max ys_and_ns
-  in  Summary { smEstimate = Estimate meas stdev
-              , smMean = Ranged mean_min mean_scaled mean_max
-              , smStdev = Ranged stdev_min stdev stdev_max
-              , smMedian = computeMedian ys (length ys)
-              , smRSquared = r_squared
+      means = reverse (mean_m2 !: acMeans ac)
+      (mean_min, mean_max) = minMax means
+      mean_ranged = Ranged mean_min mean_scaled mean_max
+
+      stdev_all = computeSSD means
+      stdev_all_w64 = ceiling stdev_all
+      stdev_scaled = scale stdevN
+      sds = stdev_all_w64 !: stdev_scaled !: acStdevs ac
+      (stdev_min, stdev_max) = minMax sds
+      stdev_ranged = Ranged stdev_min stdev_all_w64 stdev_max
+
+      -- In the list of normalized means, each value is computed from
+      -- twice the number of repeats than the previous value.
+      niters = iterate (* 2) 1
+      xs_and_ys = zipWith (\x y -> (x, x * word64ToDouble y)) niters means
+      (ols, rsq) = regress stdev_all xs_and_ys
+
+  in  Summary { smEstimate = Estimate meas stdev_scaled
+              , smOLS = ols
+              , smRSquared = rsq
+              , smStdev = stdev_ranged
+              , smMean = mean_ranged
               }
 {-# INLINE summarize #-}
 
-updateForNextRun :: Acc -> Measurement -> Acc
-updateForNextRun ac m =
+updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
+updateForNextRun ac sd m =
   ac { acNumRepeats = acNumRepeats ac * 2
      , acMeans = (measTime m `quot` acNumRepeats ac) !: acMeans ac
+     , acStdevs = (sd `quot` acNumRepeats ac) !: acStdevs ac
      }
 {-# INLINE updateForNextRun #-}
 
@@ -1530,6 +1528,8 @@ minMax = foldr f (maxBound, minBound)
 !x !: xs = x : xs
 {-# INLINE (!:) #-}
 
+infixr 5 !:
+
 
 -- ------------------------------------------------------------------------
 -- Ordered values
@@ -1538,16 +1538,9 @@ minMax = foldr f (maxBound, minBound)
 -- | A value in a range.
 data Ranged a = Ranged {irLo :: !a, irMid :: !a, irHi :: !a}
 
--- | Order the given three values to construct a range.
-fitInRange :: Ord a => a -> a -> a -> Ranged a
-fitInRange a b c
-  | a <= b, b <= c = Ranged a b c
-  | a <= c, c <= b = Ranged a c b
-  | b <= a, a <= c = Ranged b a c
-  | b <= c, c <= a = Ranged b c a
-  | c <= a, a <= b = Ranged c a b
-  | otherwise      = Ranged c b a
-{-# INLINABLE fitInRange #-}
+instance Functor Ranged where
+  fmap f (Ranged l m h) = Ranged (f l) (f m) (f h)
+  {-# INLINE fmap #-}
 
 -- | Ranged value with identical lo, high, and the body values.
 toRanged :: a -> Ranged a
@@ -1556,34 +1549,56 @@ toRanged x = Ranged x x x
 
 
 -- ------------------------------------------------------------------------
--- Median and R² computed from last k elements
+-- Analysis
 -- ------------------------------------------------------------------------
 
--- | Get the median value from given queue.
-computeMedian :: [Word64] -> Int -> Median
-computeMedian means size = Ranged lo mid hi
+-- | Simple linear regression with ordinary least square.
+regress :: Double -> [(Double, Double)] -> (OLS, RSquared)
+regress ssd xs_and_ys = (ols, r2)
   where
-    xs = sort means
-    (lo, mid, hi)
-      | size < 3, x:_ <- xs = (x,x,x)
-      | otherwise = let i = size `div` 2
-                    in  (xs!!(i-1), xs!!i, xs!!(i+1))
+    ols = fmap ceiling (ci95 sample_size ssd a)
+    r2 = Ranged (fr2 (-1)) (fr2 0) (fr2 1)
 
-{-# INLINABLE computeMedian #-}
+    -- means and sample size
+    (x_mean, y_mean, sample_size) = (sum_x / n, sum_y / n, len)
+      where
+        n = fromIntegral len
+        (sum_x, sum_y, len) = foldl' f z xs_and_ys
+        f (!sx, !sy, !sl) (x,y) = (sx + x, sy + y, sl + 1)
+        z = (0, 0, 0 :: Int)
 
--- | Compute coefficient of determination from means and a list of
--- (x,y) pairs. Regression function is simply @f(x) = ax + b@ where @b
--- = 0@ and @a@ is the mean values.
-computeRSquared :: Word64 -> Word64 -> Word64 -> [(Double, Double)] -> RSquared
-computeRSquared e1 e2 e3 ys_and_xs =
-  let (ys, xs) = unzip ys_and_xs
-      f e x = fromIntegral e * x
-      y_bar = sum ys / sum xs
-      sse e = sum [sqr (yi - f e x) | (yi, x) <- ys_and_xs]
-      sst = sum [sqr (yi - y_bar) | yi <- ys]
-      rsq e = 1 - (sse e / sst)
-  in  fitInRange (rsq e1) (rsq e2) (rsq e3)
-{-# INLINABLE computeRSquared #-}
+    -- ols
+    nume = sum [(x - x_mean) * (y - y_mean) | (x,y) <- xs_and_ys]
+    deno = sum [sqr (x - x_mean) | (x,_) <- xs_and_ys]
+    a = nume / deno
+    b = y_mean - (a * x_mean)
+
+    -- R^2
+    p k x = a * x + k * b
+    ssr k = sum [sqr (y - p k x) | (x,y) <- xs_and_ys]
+    sst = sum [sqr (y - y_mean) | (_,y) <- xs_and_ys]
+    fr2 k = 1 - (ssr k / sst)
+{-# INLINABLE regress #-}
+
+-- | Compute sample standard deviation.
+computeSSD :: [Word64] -> Double
+computeSSD normalized_means =
+  let n = fromIntegral (length normalized_means)
+      ys = map word64ToDouble normalized_means
+      y_mean = sum ys / n
+  in  sqrt (sum [sqr (y - y_mean) | y <- ys] / (n - 1))
+{-# INLINABLE computeSSD #-}
+
+-- | Compute 95% confidence interval from sample standard deviation.
+ci95 :: Int -- ^ Number of samples.
+     -> Double -- ^ Sample standard deviation.
+     -> Double -- ^ The point value.
+     -> Ranged Double
+ci95 n ssd x =
+  let se = ssd / (sqrt (fromIntegral n))
+      w = se * 1.96
+  in  Ranged (x - w) x (x + w)
+{-# INLINABLE ci95 #-}
 
 
 -- ------------------------------------------------------------------------
