@@ -1266,21 +1266,21 @@ data Estimate = Estimate
   }
 
 type OLS = Ranged Word64
-type RSquared = Ranged Double
+type R2 = Ranged Double
 type Mean = Ranged Word64
 type Stdev = Ranged Word64
 
 data Summary = Summary
   { smEstimate :: {-# UNPACK #-} !Estimate
   , smOLS      :: {-# UNPACK #-} !OLS
-  , smRSquared :: {-# UNPACK #-} !RSquared
+  , smR2       :: {-# UNPACK #-} !R2
   , smStdev    :: {-# UNPACK #-} !Stdev
   , smMean     :: {-# UNPACK #-} !Mean
   }
 
-sqr :: Num a => a -> a
-sqr x = x * x
-{-# INLINE sqr #-}
+square :: Num a => a -> a
+square x = x * x
+{-# INLINE square #-}
 
 predict
   :: Measurement -- ^ time for @n@ run
@@ -1294,7 +1294,7 @@ predict (Measurement t1 a1 c1 m1) (Measurement t2 a2 c2 m2) = Estimate
     fit x1 x2 = x1 `quot` 5 + 2 * (x2 `quot` 5)
     t = fit t1 t2
     t' = word64ToDouble t
-    d = sqr (word64ToDouble t1 - t') + sqr (word64ToDouble t2 - 2 * t')
+    d = square (word64ToDouble t1 - t') + square (word64ToDouble t2 - 2 * t')
 
 predictPerturbed :: Measurement -> Measurement -> Estimate
 predictPerturbed t1 t2 = Estimate
@@ -1503,7 +1503,7 @@ summarize ac m2 (Estimate measN stdevN) =
 
   in  Summary { smEstimate = Estimate meas stdev_scaled
               , smOLS = ols
-              , smRSquared = rsq
+              , smR2 = rsq
               , smStdev = stdev_ranged
               , smMean = mean_ranged
               }
@@ -1553,7 +1553,7 @@ toRanged x = Ranged x x x
 -- ------------------------------------------------------------------------
 
 -- | Simple linear regression with ordinary least square.
-regress :: Double -> [(Double, Double)] -> (OLS, RSquared)
+regress :: Double -> [(Double, Double)] -> (OLS, R2)
 regress ssd xs_and_ys = (ols, r2)
   where
     ols = fmap ceiling (ci95 sample_size ssd a)
@@ -1569,14 +1569,14 @@ regress ssd xs_and_ys = (ols, r2)
 
     -- ols
     nume = sum [(x - x_mean) * (y - y_mean) | (x,y) <- xs_and_ys]
-    deno = sum [sqr (x - x_mean) | (x,_) <- xs_and_ys]
+    deno = sum [square (x - x_mean) | (x,_) <- xs_and_ys]
     a = nume / deno
     b = y_mean - (a * x_mean)
 
     -- R^2
     p k x = a * x + k * b
-    ssr k = sum [sqr (y - p k x) | (x,y) <- xs_and_ys]
-    sst = sum [sqr (y - y_mean) | (_,y) <- xs_and_ys]
+    ssr k = sum [square (y - p k x) | (x,y) <- xs_and_ys]
+    sst = sum [square (y - y_mean) | (_,y) <- xs_and_ys]
     fr2 k = 1 - (ssr k / sst)
 {-# INLINABLE regress #-}
 
@@ -1586,7 +1586,7 @@ computeSSD normalized_means =
   let n = fromIntegral (length normalized_means)
       ys = map word64ToDouble normalized_means
       y_mean = sum ys / n
-  in  sqrt (sum [sqr (y - y_mean) | y <- ys] / (n - 1))
+  in  sqrt (sum [square (y - y_mean) | y <- ys] / (n - 1))
 {-# INLINABLE computeSSD #-}
 
 -- | Compute 95% confidence interval from sample standard deviation.
