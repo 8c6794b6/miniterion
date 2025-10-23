@@ -723,13 +723,17 @@ showBytes i
   where
     t = word64ToDouble i
 
-formatMeasurement :: MEnv -> Word64 -> Measurement -> Doc
-formatMeasurement menv n (Measurement t a c m) =
+formatMeasurement :: Word64 -> Measurement -> Doc
+formatMeasurement n (Measurement t a c m) =
+  fromString (show n) <>
+  (if n == 1 then " iteration gives " else " iteragions give ") <>
   showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
-  if meHasGCStats menv then
-    fromString (printf " alloc: %d copied: %d max: %d" a c m)
-  else
-    ""
+  Doc (\ !menv ->
+         if meHasGCStats menv then
+           printf " alloc: %d copied: %d max: %d" a c m
+         else
+           "") <>
+  "\n"
 
 
 -- ------------------------------------------------------------------------
@@ -1371,10 +1375,7 @@ measure menv@MEnv{meConfig=cfg} num b =
           , measMaxMem = max end_max_mem start_max_mem
           }
 
-    debugStr menv $
-      fromString (show n) <>
-      (if n == 1 then " iteration gives " else " iterations give ") <>
-      formatMeasurement menv n meas <> "\n"
+    debugStr menv $ formatMeasurement n meas
 
     pure (meas, end_time)
 
