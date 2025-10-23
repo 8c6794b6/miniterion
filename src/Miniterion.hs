@@ -158,18 +158,7 @@ toBenchmarkable f = Benchmarkable noop (const noop) (const f) False
 -- | Run benchmarks and report results, providing an interface
 -- compatible with @Criterion.Main.<https://hackage.haskell.org/package/criterion/docs/Criterion-Main.html#v:defaultMain defaultMain>@.
 defaultMain :: [Benchmark] -> IO ()
-defaultMain bs = do
-  let act = defaultMainWith defaultConfig bs
-#if MIN_VERSION_base(4,5,0)
-  setLocaleEncoding utf8
-#endif
-#if defined(mingw32_HOST_OS)
-  codePage <- getConsoleOutputCP
-  bracket (setConsoleOutputCP 65001) (\_ -> setConsoleOutputCP codePage)
-          (const act)
-#else
-  act
-#endif
+defaultMain = defaultMainWith defaultConfig
 
 -- | Attach a name to t'Benchmarkable'.
 --
@@ -346,7 +335,21 @@ benchmark = void . runBenchmark defaultMEnv . bench "..."
 -- ------------------------------------------------------------------------
 
 defaultMainWith :: Config -> [Benchmark] -> IO ()
-defaultMainWith cfg0 bs = handleMiniterionException $ do
+defaultMainWith cfg bs = do
+  let act = defaultMainWith' cfg bs
+#if MIN_VERSION_base(4,5,0)
+  setLocaleEncoding utf8
+#endif
+#if defined(mingw32_HOST_OS)
+  codePage <- getConsoleOutputCP
+  bracket (setConsoleOutputCP 65001) (\_ -> setConsoleOutputCP codePage)
+          (const act)
+#else
+  act
+#endif
+
+defaultMainWith' :: Config -> [Benchmark] -> IO ()
+defaultMainWith' cfg0 bs = handleMiniterionException $ do
   args <- getArgs
   let (opts, pats, invalids, errs) = getOpt' Permute options args
       cfg1 = foldl' (flip id) cfg0 opts
