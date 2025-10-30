@@ -74,53 +74,55 @@ module Miniterion
   ) where
 
 -- base
-import           Control.Exception     (Exception (..), SomeException (..),
-                                        bracket, evaluate, finally, handle,
-                                        throw, throwIO)
-import           Control.Monad         (guard, replicateM_, void, when)
-import           Data.Char             (toLower)
-import           Data.Foldable         (find)
-import           Data.Int              (Int64)
-import           Data.List             (isPrefixOf, nub, stripPrefix, tails)
-import           Data.String           (IsString (..))
-import           Data.Word             (Word64)
-import           GHC.Clock             (getMonotonicTime)
-import           GHC.Stats             (RTSStats (..), getRTSStats,
-                                        getRTSStatsEnabled)
-import           System.Console.GetOpt (ArgDescr (..), ArgOrder (..),
-                                        OptDescr (..), getOpt', usageInfo)
-import           System.CPUTime        (cpuTimePrecision, getCPUTime)
-import           System.Environment    (getArgs, getProgName)
-import           System.Exit           (die, exitFailure)
-import           System.IO             (BufferMode (..), Handle, IOMode (..),
-                                        hFlush, hIsTerminalDevice, hPutStrLn,
-                                        hSetBuffering, stderr, stdout, withFile)
-import           System.Mem            (performGC, performMinorGC)
-import           System.Timeout        (timeout)
-import           Text.Printf           (printf)
-import           Text.Read             (readMaybe)
+import           Control.Exception      (Exception (..), SomeException (..),
+                                         bracket, evaluate, finally, handle,
+                                         throw, throwIO)
+import           Control.Monad          (guard, replicateM_, void, when)
+import           Control.Monad.IO.Class (MonadIO (..))
+import           Data.Char              (toLower)
+import           Data.Foldable          (find)
+import           Data.Int               (Int64)
+import           Data.List              (isPrefixOf, nub, stripPrefix, tails)
+import           Data.String            (IsString (..))
+import           Data.Word              (Word64)
+import           GHC.Clock              (getMonotonicTime)
+import           GHC.Stats              (RTSStats (..), getRTSStats,
+                                         getRTSStatsEnabled)
+import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
+                                         OptDescr (..), getOpt', usageInfo)
+import           System.CPUTime         (cpuTimePrecision, getCPUTime)
+import           System.Environment     (getArgs, getProgName)
+import           System.Exit            (die, exitFailure)
+import           System.IO              (BufferMode (..), Handle, IOMode (..),
+                                         hFlush, hIsTerminalDevice, hPutStrLn,
+                                         hSetBuffering, stderr, stdout,
+                                         withFile)
+import           System.Mem             (performGC, performMinorGC)
+import           System.Timeout         (timeout)
+import           Text.Printf            (printf)
+import           Text.Read              (readMaybe)
 
 #if !MIN_VERSION_base(4,20,0)
-import           Data.Foldable         (foldl')
+import           Data.Foldable          (foldl')
 #endif
 
 #if MIN_VERSION_base(4,15,0)
-import           GHC.Exts              (SPEC (..))
+import           GHC.Exts               (SPEC (..))
 #else
-import           GHC.Exts              (SpecConstrAnnotation (..))
+import           GHC.Exts               (SpecConstrAnnotation (..))
 #endif
 
 #if MIN_VERSION_base(4,5,0)
-import           GHC.IO.Encoding       (getLocaleEncoding, setLocaleEncoding,
-                                        textEncodingName, utf8)
+import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
+                                         textEncodingName, utf8)
 #endif
 
 #if defined(mingw32_HOST_OS)
-import           Data.Word             (Word32)
+import           Data.Word              (Word32)
 #endif
 
 -- deepseq
-import           Control.DeepSeq       (NFData, force, rnf)
+import           Control.DeepSeq        (NFData, force, rnf)
 
 
 -- ------------------------------------------------------------------------
@@ -424,7 +426,7 @@ data MEnv = MEnv
     -- ^ Set containing baseline information, made from the file
     -- specified by 'cfgBaselinePath'.
   , meUseColor        :: !Bool
-    -- ^ 'True' if the output is a terminal device.
+    -- ^ 'True' if using colored output.
   , meSupportsUnicode :: !Bool
     -- ^ 'True' if unicode is supported.
   , meHasGCStats      :: !Bool
@@ -458,6 +460,33 @@ getDefaultMEnv !cfg = do
     , meSupportsUnicode = supports_unicode
     , meHasGCStats = has_gc_stats
     }
+
+-- | A monad to run 'IO' actions with t'MEnv', basically same as
+-- @ReaderT MEnv IO@.
+newtype Miniterion a = Miniterion {runMiniterion :: MEnv -> IO a}
+
+instance Functor Miniterion where
+  fmap f (Miniterion r) = Miniterion (fmap f . r)
+  {-# INLINE fmap #-}
+
+instance Applicative Miniterion where
+  pure x = Miniterion (const (pure x))
+  {-# INLINE pure #-}
+
+  Miniterion f <*> Miniterion m = Miniterion (\e -> f e <*> m e)
+  {-# INLINE (<*>) #-}
+
+instance Monad Miniterion where
+  Miniterion r >>= k = Miniterion (\e -> r e >>= \a -> runMiniterion (k a) e)
+  {-# INLINE (>>=) #-}
+
+instance MonadIO Miniterion where
+  liftIO io = Miniterion (const io)
+  {-# INLINE liftIO #-}
+
+getMEnv :: Miniterion MEnv
+getMEnv = Miniterion pure
+{-# INLINE getMEnv #-}
 
 
 -- ------------------------------------------------------------------------
@@ -511,34 +540,33 @@ runBenchmark = runBenchmarkWith runBenchmarkable
 iterBenchmark :: Word64 -> MEnv -> Benchmark -> IO [Result]
 iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
 
-runBenchmarkWith :: (MEnv -> [String] -> String -> Benchmarkable -> IO a)
+runBenchmarkWith :: (String -> Benchmarkable -> Miniterion a)
                  -> MEnv -> Benchmark -> IO [a]
-runBenchmarkWith !run menv = go []
+runBenchmarkWith !run menv b = runMiniterion (go [] b) menv
   where
     go !acc0 bnch = case bnch of
-      Bench name act -> pure <$> run menv acc0 name act
+      Bench name act -> pure <$> run (pathToName acc0 name) act
       Bgroup name bs ->
         let acc1 = consNonNull name acc0
             to_run = filter (any (isMatched menv) . benchNames acc1) bs
         in  concat <$> mapM (go acc1) to_run
-      Environment alloc clean f ->
+      Environment alloc clean f -> do
         let alloc' = alloc >>= \e -> evaluate (rnf e) >> pure e
-        in  bracket alloc' clean (go acc0 . f)
+        liftIO $ bracket alloc' clean (flip runMiniterion menv . go acc0 . f)
 
-runBenchmarkable :: MEnv -> [String] -> String -> Benchmarkable -> IO Result
-runBenchmarkable menv@MEnv {meConfig=Config{..}} parents name b = do
-  let fullname = pathToName parents name
+runBenchmarkable :: String -> Benchmarkable -> Miniterion Result
+runBenchmarkable fullname b = do
+  menv@MEnv{meConfig=Config{..}, ..} <- getMEnv
 
-  infoBenchname menv fullname
-  debugStr menv "\n"
-  hFlush stdout
-
-  mb_sum <- withTimeout cfgTimeout (measureUntil menv b)
+  infoBenchname fullname
+  debugStr "\n"
+  liftIO $ hFlush stdout
+  mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
 
   let (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary est _ _ _ _) ->
-          case compareVsBaseline (meBaselineSet menv) fullname est of
+          case compareVsBaseline meBaselineSet fullname est of
             Nothing  -> (Done, Nothing)
             Just cmp ->
               let is_acceptable
@@ -547,43 +575,41 @@ runBenchmarkable menv@MEnv {meConfig=Config{..}} parents name b = do
                     | otherwise                  = Done
               in  (is_acceptable, Just cmp)
 
-  infoStr menv (formatResult result mb_sum mb_cmp)
-  mapM_ (putCsvLine menv fullname mb_sum) (meCsvHandle menv)
+  infoStr (formatResult result mb_sum mb_cmp)
+  liftIO $ mapM_ (putCsvLine meHasGCStats fullname mb_sum) meCsvHandle
   pure result
 
-iterBenchmarkable :: Word64 -> MEnv -> [String] -> String -> Benchmarkable
-                  -> IO Result
-iterBenchmarkable n menv@MEnv{meConfig=cfg} parents name Benchmarkable{..} = do
-  let fullname = pathToName parents name
-      -- Repeating the `run 1' when the perRun field of the benchmark
-      -- is True, to initialize and cleanup the environment every
-      -- time.
-      go | perRun    = replicateM_ (fromIntegral n) (run 1)
+iterBenchmarkable :: Word64 -> String -> Benchmarkable -> Miniterion Result
+iterBenchmarkable n fullname Benchmarkable{..} = do
+  MEnv{meConfig=Config{..}} <- getMEnv
+
+  -- Repeating the `run 1' when the perRun field of the benchmark is
+  -- True, to initialize and cleanup the environment every time.
+  let go | perRun    = replicateM_ (fromIntegral n) (run 1)
          | otherwise = run n
         where
-          run i =
-            bracket (allocEnv i) (cleanEnv i) (`runRepeatedly` i)
+          run i = bracket (allocEnv i) (cleanEnv i) (`runRepeatedly` i)
 
-  infoBenchname menv fullname
-  hFlush stdout
-  mb_unit <- withTimeout (cfgTimeout cfg) go
+  infoBenchname fullname
+  liftIO $ hFlush stdout
+  mb_unit <- withTimeout cfgTimeout (liftIO go)
 
   case mb_unit of
-    Just () -> infoStr menv "\n" >> pure Done
+    Just () -> infoStr "\n" >> pure Done
     _ -> do
       let result = TimedOut fullname
-      infoStr menv (formatResult result Nothing Nothing)
+      infoStr (formatResult result Nothing Nothing)
       pure result
 
-infoBenchname :: MEnv -> String -> IO ()
-infoBenchname menv name =
-  infoStr menv (white "benchmarking " <> boldCyan (fromString name) <> " ")
+infoBenchname :: String -> Miniterion ()
+infoBenchname name =
+  infoStr (white "benchmarking " <> boldCyan (fromString name) <> " ")
 {-# INLINE infoBenchname #-}
 
-withTimeout :: Timeout -> IO a -> IO (Maybe a)
-withTimeout tout act = case tout of
-  Timeout micro -> timeout (fromIntegral micro) act
-  NoTimeout     -> fmap Just act
+withTimeout :: Timeout -> Miniterion a -> Miniterion (Maybe a)
+withTimeout tout m@(Miniterion r) = case tout of
+  Timeout micro -> Miniterion (timeout (fromIntegral micro) . r)
+  NoTimeout     -> fmap Just m
 
 benchNames :: [String] -> Benchmark -> [String]
 benchNames = go
@@ -613,9 +639,13 @@ noop = const (pure ())
 -- Printing with verbosity
 -- ------------------------------------------------------------------------
 
-infoStr, debugStr :: MEnv -> Doc -> IO ()
-infoStr = putDocWith 1
-debugStr = putDocWith 2
+infoStr, debugStr :: Doc -> Miniterion ()
+infoStr = Miniterion . flip infoStr'
+debugStr = Miniterion . flip debugStr'
+
+infoStr', debugStr' :: MEnv -> Doc -> IO ()
+infoStr' = putDocWith 1
+debugStr' = putDocWith 2
 
 putDocWith :: Int -> MEnv -> Doc -> IO ()
 putDocWith n menv doc =
@@ -743,6 +773,7 @@ formatMeasurement n (Measurement t a c m) =
 -- Matching benchmark names
 -- ------------------------------------------------------------------------
 
+-- | Data type to express how to match benchmark names.
 data MatchMode
   = Pattern -- ^ Substring match
   | Prefix  -- ^ Prefix match
@@ -904,14 +935,14 @@ withCsvSettings menv0@MEnv{meConfig=cfg} act = do
       hPutStrLn hdl (header ++ extras)
       act menv1 {meCsvHandle = Just hdl}
 
-putCsvLine :: MEnv -> String -> Maybe Summary -> Handle -> IO ()
-putCsvLine menv name mb_summary hdl =
-  let put_line s = hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary menv s)
+putCsvLine :: Bool -> String -> Maybe Summary -> Handle -> IO ()
+putCsvLine has_gc name mb_summary hdl =
+  let put_line s = hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary has_gc s)
   in  maybe (pure ()) put_line mb_summary
 
-csvSummary :: MEnv -> Summary -> String
-csvSummary menv (Summary (Estimate m _) _ols _rsq stdev mean)
-  | meHasGCStats menv = time ++ "," ++ gc
+csvSummary :: Bool -> Summary -> String
+csvSummary has_gc (Summary (Estimate m _) _ols _rsq stdev mean)
+  | has_gc    = time ++ "," ++ gc
   | otherwise = time
   where
     time =
@@ -1205,6 +1236,7 @@ handleMiniterionException =
 -- Getting current time
 -- ------------------------------------------------------------------------
 
+-- | Data type to select the function to get times.
 data TimeMode
   = CpuTime -- ^ Measure CPU time.
   | WallTime -- ^ Measure wall-clock time.
@@ -1219,14 +1251,14 @@ getTimePicoSecs = \case
 -- Getting GC info
 -- ------------------------------------------------------------------------
 
-getAllocsAndCopied :: MEnv -> IO (Word64, Word64, Word64)
-getAllocsAndCopied menv =
+getAllocsAndCopied :: Bool -> IO (Word64, Word64, Word64)
+getAllocsAndCopied has_gc_stats =
 #if MIN_VERSION_base(4,10,0)
-  if not (meHasGCStats menv) then pure (0, 0, 0) else
+  if not has_gc_stats then pure (0, 0, 0) else
     (\s -> (allocated_bytes s, copied_bytes s, max_mem_in_use_bytes s))
     <$> getRTSStats
 #elif MIN_VERSION_base(4,6,0)
-  if not (meHasGCStats menv) then pure (0, 0, 0) else
+  if not has_gc_stats then pure (0, 0, 0) else
     (\s -> (int64ToWord64 $ bytesAllocated s,
             int64ToWord64 $ bytesCopied s,
             int64ToWord64 $ peakMegabytesAllocated s * 1024 * 1024))
@@ -1251,6 +1283,7 @@ getGCStatsEnabled = pure False
 -- Measuring
 -- ------------------------------------------------------------------------
 
+-- | Express duration for timeout.
 data Timeout
   = Timeout !Word64
   -- ^ Duration in microseconds (e.g., 2000000 for 2 seconds).
@@ -1361,16 +1394,18 @@ runLoop Benchmarkable{..} n f
 {-# INLINE runLoop #-}
 
 measure :: MEnv -> Word64 -> Benchmarkable -> IO Measured
-measure menv@MEnv{meConfig=cfg} num b =
+measure menv@MEnv{meConfig=cfg, meHasGCStats=gc} num b =
   runLoop b num $ \ !n act -> do
     let getTimePicoSecs' = getTimePicoSecs (cfgTimeMode cfg)
+
     performMinorGC
     start_time <- getTimePicoSecs'
-    (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied menv
+    (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied gc
     act
     end_time <- getTimePicoSecs'
     performMinorGC
-    (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied menv
+    (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied gc
+
     let meas = Measurement
           { measTime = end_time - start_time
           , measAllocs = end_allocs - start_allocs
@@ -1378,7 +1413,7 @@ measure menv@MEnv{meConfig=cfg} num b =
           , measMaxMem = max end_max_mem start_max_mem
           }
 
-    debugStr menv $ formatMeasurement n meas
+    debugStr' menv $ formatMeasurement n meas
 
     pure (meas, end_time)
 
@@ -1453,7 +1488,7 @@ data Acc = Acc
 
 initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
 initializeAcc menv b = do
-  debugStr menv "*** Starting initialization\n"
+  debugStr' menv "*** Starting initialization\n"
   go 0 1
   where
     threshold = precision * 30
@@ -1471,7 +1506,7 @@ initializeAcc menv b = do
       if t < threshold || (i < 2 && t < threshold * 2)
         then go (i + 1) (n * 2)
         else do
-          debugStr menv "*** Initialization done\n"
+          debugStr' menv "*** Initialization done\n"
           pure ( meas
                , Acc { acNumRepeats = 2 * n
                      , acMeans = (t `quot` n) !: []
