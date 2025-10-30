@@ -77,7 +77,7 @@ module Miniterion
 import           Control.Exception      (Exception (..), SomeException (..),
                                          bracket, evaluate, finally, handle,
                                          throw, throwIO)
-import           Control.Monad          (guard, replicateM_, void, when)
+import           Control.Monad          (guard, void, when)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Char              (toLower)
 import           Data.Foldable          (find)
@@ -580,19 +580,12 @@ runBenchmarkable fullname b = do
   pure result
 
 iterBenchmarkable :: Word64 -> String -> Benchmarkable -> Miniterion Result
-iterBenchmarkable n fullname Benchmarkable{..} = do
+iterBenchmarkable n fullname b = do
   MEnv{meConfig=Config{..}} <- getMEnv
-
-  -- Repeating the `run 1' when the perRun field of the benchmark is
-  -- True, to initialize and cleanup the environment every time.
-  let go | perRun    = replicateM_ (fromIntegral n) (run 1)
-         | otherwise = run n
-        where
-          run i = bracket (allocEnv i) (cleanEnv i) (`runRepeatedly` i)
 
   infoBenchname fullname
   liftIO $ hFlush stdout
-  mb_unit <- withTimeout cfgTimeout (liftIO go)
+  mb_unit <- withTimeout cfgTimeout (liftIO $ runLoop b n id)
 
   case mb_unit of
     Just () -> infoStr "\n" >> pure Done
@@ -1298,7 +1291,23 @@ data Measurement = Measurement
   }
 
 -- | Measurement paired with end time.
-type Measured = (Measurement, Word64)
+data Measured = Measured
+  { mdMeas     :: {-# UNPACK #-} !Measurement
+  , _mdEndTIme :: {-# UNPACK #-} !Word64
+  }
+
+instance Semigroup Measured where
+  Measured !m1 _ <> Measured !m2 !e2 = Measured m3 e2
+    where
+      on h g = h (g m1) (g m2)
+      add = on (+)
+      max_of = on max
+      m3 = Measurement { measTime = add measTime
+                       , measAllocs = add measAllocs
+                       , measCopied = add measCopied
+                       , measMaxMem = max_of measMaxMem
+                       }
+  {-# INLINE (<>) #-}
 
 data Estimate = Estimate
   { estMean  :: {-# UNPACK #-} !Measurement
@@ -1360,14 +1369,13 @@ oneMillisecond = 1000000000
 
 -- See 'Criterion.Measurement.runBenchmarkable' in the
 -- criterion-measurement package.
-runLoop :: Benchmarkable -> Word64 -> (Word64 -> IO () -> IO Measured)
-        -> IO Measured
+runLoop :: Semigroup a => Benchmarkable -> Word64 -> (IO () -> IO a) -> IO a
 runLoop Benchmarkable{..} n f
   | perRun    = work >>= go (n - 1)
   | otherwise = work
   where
     go 0 result   = pure result
-    go !i !result = work >>= go (i - 1) . comb result
+    go !i !result = work >>= go (i - 1) . (<>) result
 
     count | perRun = 1
           | otherwise = n
@@ -1377,30 +1385,18 @@ runLoop Benchmarkable{..} n f
       let clean = cleanEnv count e
           run = runRepeatedly e count
       clean `seq` run `seq` evaluate (rnf e)
-      f count run `finally` clean
+      f run `finally` clean
     {-# INLINE work #-}
-
-    comb (!m1, _) (!m2, !e2) = (m3, e2)
-      where
-        on h g = h (g m1) (g m2)
-        add = on (+)
-        max_of = on max
-        m3 = Measurement { measTime = add measTime
-                         , measAllocs = add measAllocs
-                         , measCopied = add measCopied
-                         , measMaxMem = max_of measMaxMem
-                         }
-    {-# INLINE comb #-}
 {-# INLINE runLoop #-}
 
 measure :: MEnv -> Word64 -> Benchmarkable -> IO Measured
-measure menv@MEnv{meConfig=cfg, meHasGCStats=gc} num b =
-  runLoop b num $ \ !n act -> do
+measure MEnv{meConfig=cfg, meHasGCStats=gc} num b =
+  runLoop b num $ \act -> do
     let getTimePicoSecs' = getTimePicoSecs (cfgTimeMode cfg)
 
     performMinorGC
-    start_time <- getTimePicoSecs'
     (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied gc
+    start_time <- getTimePicoSecs'
     act
     end_time <- getTimePicoSecs'
     performMinorGC
@@ -1413,13 +1409,11 @@ measure menv@MEnv{meConfig=cfg, meHasGCStats=gc} num b =
           , measMaxMem = max end_max_mem start_max_mem
           }
 
-    debugStr' menv $ formatMeasurement n meas
-
-    pure (meas, end_time)
+    pure $ Measured meas end_time
 
 measureUntil :: MEnv -> Benchmarkable -> IO Summary
 measureUntil menv@MEnv{meConfig=Config{..}} b
-  | is_once = fmap (measToSummary . fst) (measure menv 1 b)
+  | is_once = fmap (measToSummary . mdMeas) (measure menv 1 b)
   | otherwise = init_and_go
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
@@ -1431,7 +1425,8 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       go start_time m0 acc
 
     go start_time m1 !acc = do
-      (m2, end_time) <- measure menv (acNumRepeats acc) b
+      Measured m2 end_time <- measure menv (acNumRepeats acc) b
+      debugStr' menv $ formatMeasurement (acNumRepeats acc) m2
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           meanN = measTime measN
@@ -1496,7 +1491,9 @@ initializeAcc menv b = do
 
     go :: Word64 -> Word64 -> IO (Measurement, Acc)
     go !i !n = do
-      meas@(Measurement t _ _ _) <- fmap fst (measure menv n b)
+      meas@(Measurement t _ _ _) <- fmap mdMeas (measure menv n b)
+      debugStr' menv $ formatMeasurement n meas
+
       -- Discarding Measurement data when the total duration is
       -- shorter than threshold. Too short measurement is considered
       -- imprecise and unreliable. When the total duration is less
