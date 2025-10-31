@@ -1116,7 +1116,7 @@ options =
      ,"--baseline), it will be reported as failed"])
 
   , Option ['s'] ["stdev"]
-    (ReqArg (\str o -> case parsePositivePercents str of
+    (ReqArg (\str o -> case parseNonNegativeParcents str of
                 Just x -> o {cfgRelStDev = x}
                 _      -> throw (InvalidArgument "stdev" str))
      "NUM")
@@ -1171,10 +1171,16 @@ options =
     "Show version info"
   ]
 
+parseNonNegativeParcents :: String -> Maybe Double
+parseNonNegativeParcents = parsePercentsWith (>= 0)
+
 parsePositivePercents :: String -> Maybe Double
-parsePositivePercents xs = do
+parsePositivePercents = parsePercentsWith (> 0)
+
+parsePercentsWith :: (Double -> Bool) -> String -> Maybe Double
+parsePercentsWith test xs = do
   x <- readMaybe xs
-  guard (x > 0)
+  guard (test x)
   pure (x / 100)
 
 
