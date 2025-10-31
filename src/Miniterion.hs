@@ -658,7 +658,7 @@ formatResult res (Just summary) mb_cmp =
   id    "                     " <> rsq_str id (irMid rsq) <> "   " <>
   show_minmax_rsq <> "\n" <>
   --
-  white "mean                 " <> showPicos5 (measTime m) <> "   " <>
+  white "mean                 " <> showPicos5 (irMid mean) <> "   " <>
   show_minmax (irLo mean) (irHi mean) <> "\n" <>
   --
   white "std dev              " <> showPicos5 (2 * irMid sd) <> "   " <>
