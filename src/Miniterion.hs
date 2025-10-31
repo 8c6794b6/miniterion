@@ -275,7 +275,7 @@ perRunEnvWithCleanup alloc clean run = bm {perRun = True}
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nf nf>@.
 nf :: NFData b => (a -> b) -> a -> Benchmarkable
-nf = fmap toBenchmarkable . funcToBench rnf
+nf = fmap toBenchmarkable . nf' rnf
 {-# INLINE nf #-}
 
 -- | 'whnf' @f@ @x@ measures time to compute a weak head normal form
@@ -285,7 +285,7 @@ nf = fmap toBenchmarkable . funcToBench rnf
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnf whnf>@.
 whnf :: (a -> b) -> a -> Benchmarkable
-whnf = fmap toBenchmarkable . funcToBench id
+whnf = fmap toBenchmarkable . whnf'
 {-# INLINE whnf #-}
 
 -- | 'nfIO' @x@ measures time to evaluate side-effects of @x@ and
@@ -1673,8 +1673,8 @@ data SPEC = SPEC
 {-# ANN type SPEC ForceSpecConstr #-}
 #endif
 
-funcToBench :: (b -> c) -> (a -> b) -> a -> Word64 -> IO ()
-funcToBench frc = benchLoop SPEC
+nf' :: (b -> c) -> (a -> b) -> a -> Word64 -> IO ()
+nf' frc = benchLoop SPEC
   where
     -- Explicitly passing `f' and `x' as the arguments of `benchLoop',
     -- so that ghc won't optimize away them. This approach is taken in
@@ -1686,7 +1686,18 @@ funcToBench frc = benchLoop SPEC
       | otherwise = do
           val <- evaluate (f x)
           frc val `seq` benchLoop SPEC f x (n - 1)
-{-# NOINLINE funcToBench #-}
+{-# NOINLINE nf' #-}
+
+whnf' :: (a -> b) -> a -> Word64 -> IO ()
+whnf' = go SPEC
+  where
+    -- See the comment in `nf'' for explicit `f' and `x'.
+    go !_ f x n
+      | n == 0 = pure ()
+      | otherwise = do
+          _ <- evaluate (f x)
+          go SPEC f x (n - 1)
+{-# NOINLINE whnf' #-}
 
 ioToBench :: (a -> b) -> IO a -> (Word64 -> IO ())
 ioToBench frc a = go
