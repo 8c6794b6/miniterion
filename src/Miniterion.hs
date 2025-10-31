@@ -277,7 +277,6 @@ perRunEnvWithCleanup alloc clean run = bm {perRun = True}
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nf nf>@.
 nf :: NFData b => (a -> b) -> a -> Benchmarkable
 nf = fmap toBenchmarkable . nf' rnf
-{-# INLINE nf #-}
 
 -- | 'whnf' @f@ @x@ measures time to compute a weak head normal form
 -- of an application of @f@ to @x@.  This does not include time to
@@ -287,7 +286,6 @@ nf = fmap toBenchmarkable . nf' rnf
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnf whnf>@.
 whnf :: (a -> b) -> a -> Benchmarkable
 whnf = fmap toBenchmarkable . whnf'
-{-# INLINE whnf #-}
 
 -- | 'nfIO' @x@ measures time to evaluate side-effects of @x@ and
 -- compute its normal form (by means of 'force', not
@@ -296,7 +294,6 @@ whnf = fmap toBenchmarkable . whnf'
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nfIO nfIO>@.
 nfIO :: NFData a => IO a -> Benchmarkable
 nfIO = toBenchmarkable . ioToBench rnf
-{-# INLINE nfIO #-}
 
 -- | 'whnfIO' @x@ measures time to evaluate side-effects of @x@ and
 -- compute its weak head normal form.
@@ -304,7 +301,6 @@ nfIO = toBenchmarkable . ioToBench rnf
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnfIO whnfIO>@.
 whnfIO :: IO a -> Benchmarkable
 whnfIO = toBenchmarkable . ioToBench id
-{-# INLINE whnfIO #-}
 
 -- | 'nfAppIO' @f@ @x@ measures time to evaluate side-effects of an
 -- application of @f@ to @x@ and compute its normal form (by means of
@@ -315,7 +311,6 @@ whnfIO = toBenchmarkable . ioToBench id
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nfAppIO nfAppIO>@.
 nfAppIO :: NFData b => (a -> IO b) -> a -> Benchmarkable
 nfAppIO = fmap toBenchmarkable . ioFuncToBench rnf
-{-# INLINE nfAppIO #-}
 
 -- | 'whnfAppIO' @f@ @x@ measures time to evaluate side-effects of an
 -- application of @f@ to @x@ and compute its weak head normal form.
@@ -325,7 +320,6 @@ nfAppIO = fmap toBenchmarkable . ioFuncToBench rnf
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnfAppIO whnfAppIO>@.
 whnfAppIO :: (a -> IO b) -> a -> Benchmarkable
 whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
-{-# INLINE whnfAppIO #-}
 
 -- | Run a benchmark interactively, providing an interface compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:benchmark benchmark>@.
