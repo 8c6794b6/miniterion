@@ -75,8 +75,8 @@ module Miniterion
 
 -- base
 import           Control.Exception      (Exception (..), SomeException (..),
-                                         bracket, evaluate, finally, handle,
-                                         throw, throwIO)
+                                         evaluate, finally, handle, throw,
+                                         throwIO)
 import           Control.Monad          (guard, void, when)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Char              (toLower)
@@ -118,6 +118,7 @@ import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
 #endif
 
 #if defined(mingw32_HOST_OS)
+import           Control.Exception      (bracket)
 import           Data.Word              (Word32)
 #endif
 
@@ -550,9 +551,9 @@ runBenchmarkWith !run menv b = runMiniterion (go [] b) menv
         let acc1 = consNonNull name acc0
             to_run = filter (any (isMatched menv) . benchNames acc1) bs
         in  concat <$> mapM (go acc1) to_run
-      Environment alloc clean f -> do
-        let alloc' = alloc >>= \e -> evaluate (rnf e) >> pure e
-        liftIO $ bracket alloc' clean (flip runMiniterion menv . go acc0 . f)
+      Environment !alloc !clean f -> liftIO $ do
+        e <- alloc >>= \e -> evaluate (rnf e) >> pure e
+        runMiniterion (go acc0 (f e)) menv `finally` clean e
 
 runBenchmarkable :: String -> Benchmarkable -> Miniterion Result
 runBenchmarkable fullname b = do
