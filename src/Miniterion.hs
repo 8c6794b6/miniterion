@@ -417,7 +417,7 @@ showNames menv =
 
 -- | Internal environment for miniterion.
 data MEnv = MEnv
-  { meConfig          :: !Config
+  { meConfig          :: Config
     -- ^ Configuration of this environment.
   , mePatterns        :: ![String]
     -- ^ Patterns to filter running benchmarks
