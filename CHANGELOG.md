@@ -19,6 +19,8 @@
 
 * Perform minor GC after running target function to update RTSStats.
 
+* Add `--json` option to write JSON summary.
+
 * Add `--iters` option to run benchmarks without analysis.
 
 * Silence the outputs in tests.

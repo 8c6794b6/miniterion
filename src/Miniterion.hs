@@ -80,9 +80,10 @@ import           Control.Exception      (Exception (..), SomeException (..),
 import           Control.Monad          (guard, void, when)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Char              (toLower)
-import           Data.Foldable          (find)
+import           Data.Foldable          (find, foldlM)
 import           Data.Int               (Int64)
-import           Data.List              (isPrefixOf, nub, stripPrefix, tails)
+import           Data.List              (intercalate, isPrefixOf, nub,
+                                         stripPrefix, tails)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
 import           GHC.Clock              (getMonotonicTime)
@@ -94,9 +95,9 @@ import           System.CPUTime         (cpuTimePrecision, getCPUTime)
 import           System.Environment     (getArgs, getProgName)
 import           System.Exit            (die, exitFailure)
 import           System.IO              (BufferMode (..), Handle, IOMode (..),
-                                         hFlush, hIsTerminalDevice, hPutStrLn,
-                                         hSetBuffering, stderr, stdout,
-                                         withFile)
+                                         hFlush, hIsTerminalDevice, hPutStr,
+                                         hPutStrLn, hSetBuffering, stderr,
+                                         stdout, withFile)
 import           System.Mem             (performGC, performMinorGC)
 import           System.Timeout         (timeout)
 import           Text.Printf            (printf)
@@ -362,7 +363,12 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
     Version  -> putStrLn builtWithMiniterion
     DoList   -> showNames menv0 root_bs
     DoIter n -> do_iter n
-    DoBench  -> withCsvSettings menv0 do_bench
+    DoBench  -> withHandles menv0 do_bench
+
+withHandles :: MEnv -> (MEnv -> IO a) -> IO a
+withHandles menv0 act =
+  withCsvSettings menv0 $ \menv1 -> withJSONSettings menv1 act
+{-# INLINE withHandles #-}
 
 showHelp :: MEnv -> IO ()
 showHelp menv = do
@@ -417,6 +423,8 @@ data MEnv = MEnv
     -- ^ Patterns to filter running benchmarks
   , meCsvHandle       :: !(Maybe Handle)
     -- ^ File handle to write benchmark result in CSV format.
+  , meJsonHandle      :: !(Maybe Handle)
+    -- ^ File handle to write benchmark result of JSON summary.
   , meBaselineSet     :: !Baseline
     -- ^ Set containing baseline information, made from the file
     -- specified by 'cfgBaselinePath'.
@@ -432,6 +440,7 @@ data MEnv = MEnv
 defaultMEnv :: MEnv
 defaultMEnv = MEnv
   { meCsvHandle = Nothing
+  , meJsonHandle = Nothing
   , meBaselineSet = mempty
   , mePatterns = []
   , meConfig = defaultConfig
@@ -506,7 +515,7 @@ summariseResults rs = do
       pr (name, why) = putStrLn ("  - " ++ name ++ " (" ++ why ++ ")")
   when (0 < num_failed) $ do
     printf "\n%d out of %d %s failed:\n" num_failed num_result bs
-    mapM_ (mapM_ pr . failedNameAndReason) rs
+    mapM_ (mapM_ pr . failedNameAndReason) (reverse rs)
     exitFailure
 
 isTooFast, isTooSlow :: Result -> Bool
@@ -535,22 +544,27 @@ runBenchmark = runBenchmarkWith runBenchmarkable
 iterBenchmark :: Word64 -> MEnv -> Benchmark -> IO [Result]
 iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
 
-runBenchmarkWith :: (String -> Benchmarkable -> Miniterion a)
+runBenchmarkWith :: (Int -> String -> Benchmarkable -> Miniterion a)
                  -> MEnv -> Benchmark -> IO [a]
-runBenchmarkWith !run menv b = runMiniterion (go [] b) menv
+runBenchmarkWith !run menv b = fst <$> runMiniterion (go ([],0) b) menv
   where
-    go !acc0 bnch = case bnch of
-      Bench name act -> pure <$> run (pathToName acc0 name) act
-      Bgroup name bs ->
-        let acc1 = consNonNull name acc0
-            to_run = filter (any (isMatched menv) . benchNames acc1) bs
-        in  concat <$> mapM (go acc1) to_run
+    go (!parents,!i) bnch = case bnch of
+      Bench name act -> do
+        r <- run i (pathToName parents name) act
+        pure ([r], i+1)
+      Bgroup name bs -> do
+        let parents' = consNonNull name parents
+            to_run = filter (any (isMatched menv) . benchNames parents') bs
+            f (!rs, !j) bnch' = do
+              (rs', j') <- go (parents', j) bnch'
+              pure (rs' ++ rs, j')
+        foldlM f ([],i) to_run
       Environment !alloc !clean f -> liftIO $ do
         e <- alloc >>= \e -> evaluate (rnf e) >> pure e
-        runMiniterion (go acc0 (f e)) menv `finally` clean e
+        runMiniterion (go (parents, i) (f e)) menv `finally` clean e
 
-runBenchmarkable :: String -> Benchmarkable -> Miniterion Result
-runBenchmarkable fullname b = do
+runBenchmarkable :: Int -> String -> Benchmarkable -> Miniterion Result
+runBenchmarkable idx fullname b = do
   menv@MEnv{meConfig=Config{..}, ..} <- getMEnv
 
   infoBenchname fullname
@@ -560,7 +574,7 @@ runBenchmarkable fullname b = do
 
   let (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
-        Just (Summary est _ _ _ _) ->
+        Just (Summary est _ _ _ _ _) ->
           case compareVsBaseline meBaselineSet fullname est of
             Nothing  -> (Done, Nothing)
             Just cmp ->
@@ -571,11 +585,17 @@ runBenchmarkable fullname b = do
               in  (is_acceptable, Just cmp)
 
   infoStr (formatResult result mb_sum mb_cmp)
-  liftIO $ mapM_ (putCsvLine meHasGCStats fullname mb_sum) meCsvHandle
+  liftIO $ case mb_sum of
+    Nothing -> mapM_ (putFailedJSON idx fullname) meJsonHandle
+    Just summary -> do
+      mapM_ (putCsvLine meHasGCStats fullname summary) meCsvHandle
+      mapM_ (putSummaryJSON idx fullname summary) meJsonHandle
+
   pure result
 
-iterBenchmarkable :: Word64 -> String -> Benchmarkable -> Miniterion Result
-iterBenchmarkable n fullname b = do
+iterBenchmarkable :: Word64 -> Int -> String -> Benchmarkable
+                  -> Miniterion Result
+iterBenchmarkable n _idx fullname b = do
   MEnv{meConfig=Config{..}} <- getMEnv
 
   infoBenchname fullname
@@ -666,7 +686,7 @@ formatResult res (Just summary) mb_cmp =
   --
   formatGC m <> "\n\n"
   where
-    Summary (Estimate m _) ols rsq sd mean = summary
+    Summary (Estimate m _) ols rsq sd mean _ = summary
     fail_or_blank
       | isTooFast res || isTooSlow res = boldRed "FAIL"
       | otherwise = ""
@@ -923,13 +943,12 @@ withCsvSettings menv0@MEnv{meConfig=cfg} act = do
       hPutStrLn hdl (header ++ extras)
       act menv1 {meCsvHandle = Just hdl}
 
-putCsvLine :: Bool -> String -> Maybe Summary -> Handle -> IO ()
-putCsvLine has_gc name mb_summary hdl =
-  let put_line s = hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary has_gc s)
-  in  maybe (pure ()) put_line mb_summary
+putCsvLine :: Bool -> String -> Summary -> Handle -> IO ()
+putCsvLine has_gc name summary hdl =
+  hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary has_gc summary)
 
 csvSummary :: Bool -> Summary -> String
-csvSummary has_gc (Summary (Estimate m _) _ols _rsq stdev mean)
+csvSummary has_gc (Summary (Estimate m _) _ols _rsq stdev mean _)
   | has_gc    = time ++ "," ++ gc
   | otherwise = time
   where
@@ -996,6 +1015,75 @@ encodeCsv xs
 
 
 -- ------------------------------------------------------------------------
+-- JSON
+-- ------------------------------------------------------------------------
+
+-- The JSON report made by Miniterion differs from the one made by
+-- Criterion. Some of the keys are missing (e.g., KDE, outlier). Some
+-- of the keys have the same names but the meaning differs (e.g.,
+-- confIntLDX, confIntUDX). Hope that the use of the same names will
+-- help reusing the JSON parser between Miniterion and Criterion.
+
+withJSONSettings :: MEnv -> (MEnv -> IO a) -> IO a
+withJSONSettings menv@MEnv{meConfig=cfg} act =
+  case cfgJsonPath cfg of
+    Nothing -> act menv {meJsonHandle = Nothing}
+    Just path -> withFile path WriteMode $ \hdl -> do
+      hSetBuffering hdl NoBuffering
+      hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
+      act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
+
+putFailedJSON :: Int -> String -> Handle -> IO ()
+putFailedJSON !idx name hdl = do
+  when (idx /= 0) $ hPutStr hdl ","
+  hPutStr hdl $
+    "{\"reportAnalysis\":null" ++
+    ",\"reportKeys\":null" ++
+    ",\"reportMeasured\":null" ++
+    ",\"reportName\":" ++ show name ++
+    ",\"reportNumber\":" ++ show idx ++
+    "}"
+{-# INLINABLE putFailedJSON #-}
+
+putSummaryJSON :: Int -> String -> Summary -> Handle -> IO ()
+putSummaryJSON !idx name Summary{..} hdl = do
+  when (idx /= 0) $ hPutStr hdl ","
+  hPutStr hdl $
+    "{\"reportAnalysis\":" ++ analysis ++
+    ",\"reportKeys\":" ++ keys ++
+    ",\"reportMeasured\":" ++ measured ++
+    ",\"reportName\":" ++ show name ++
+    ",\"reportNumber\":" ++ show idx ++
+    "}"
+  where
+    analysis =
+      "{\"anMean\":" ++ est (fmap picoToSecs smMean) ++
+      ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++
+      est (fmap picoToSecs smOLS) ++
+      "},\"regRSquare\":" ++ est smR2 ++
+      "}],\"anStdDev\":" ++ est (fmap picoToSecs smStdev) ++
+      "}"
+      where
+        est (Ranged lo mid hi) =
+          "{\"estError\":{\"confIntLDX\":" ++ show (mid - lo) ++
+          ",\"confIntUDX\":" ++ show (hi - mid) ++
+          "},\"estPoint\":" ++ show mid ++
+          "}"
+        picoToSecs pico = word64ToDouble pico / 1e12
+    keys =
+      "[\"time\",\"iters\",\"allocated\",\"peakMbAllocated\",\"bytesCopied\"]"
+    measured =
+      "[" ++ intercalate "," (map meas_to_arr smMeasured) ++ "]"
+      where
+        meas_to_arr (n, Measurement t a c m) =
+          "[" ++ show t ++ "," ++ show n ++ "," ++
+          (if a == 0 then "null" else show a) ++ "," ++
+          (if m == 0 then "null" else show (m `quot` 1000000)) ++ "," ++
+          (if c == 0 then "null" else show c) ++ "]"
+{-# INLINABLE putSummaryJSON #-}
+
+
+-- ------------------------------------------------------------------------
 -- Configuration
 -- ------------------------------------------------------------------------
 
@@ -1010,6 +1098,8 @@ data Config = Config
     -- made with @--csv@ option in advance.
   , cfgCsvPath      :: Maybe FilePath
     -- ^ Path to a file for writing results in CSV format.
+  , cfgJsonPath     :: Maybe FilePath
+    -- ^ Path to a file for writing JSON summary.
   , cfgFailIfFaster :: Double
     -- ^ Upper bound of acceptable speed up.
   , cfgFailIfSlower :: Double
@@ -1049,6 +1139,7 @@ defaultConfig = Config
   , cfgCsvPath = Nothing
   , cfgFailIfFaster = 1.0 / 0.0
   , cfgFailIfSlower = 1.0 / 0.0
+  , cfgJsonPath = Nothing
   , cfgMatch = Prefix
   , cfgRelStDev = 0.05
   , cfgTimeMode = CpuTime
@@ -1094,6 +1185,11 @@ options =
     (ReqArg (\str o -> o {cfgCsvPath = Just str})
      "FILE")
     "File to write CSV summary to"
+
+  , Option [] ["json"]
+    (ReqArg (\str o -> o {cfgJsonPath = Just str})
+    "FILE")
+    "File to write JSON summary to"
 
   , Option [] ["fail-if-faster"]
     (ReqArg (\str o -> case parsePositivePercents str of
@@ -1326,6 +1422,8 @@ data Summary = Summary
   , smR2       :: {-# UNPACK #-} !R2
   , smStdev    :: {-# UNPACK #-} !Stdev
   , smMean     :: {-# UNPACK #-} !Mean
+  , smMeasured :: [(Word64, Measurement)]
+    -- ^ Pair of iteration count and measurement.
   }
 
 square :: Num a => a -> a
@@ -1443,7 +1541,7 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
         else go start_time m2 (updateForNextRun acc stdevN m2)
 
 measToSummary :: Measurement -> Summary
-measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq
+measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq []
   where
     est = Estimate m 0
     mean = toRanged t
@@ -1477,9 +1575,10 @@ warnOnTooLongBenchmark tout t_start t_now =
 -- ------------------------------------------------------------------------
 
 data Acc = Acc
-  { acNumRepeats :: {-# UNPACK #-} !Word64
-  , acMeans      :: {-# UNPACK #-} ![Word64]
-  , acStdevs     :: {-# UNPACK #-} ![Word64]
+  { acNumRepeats   :: {-# UNPACK #-} !Word64
+  , acMeans        :: {-# UNPACK #-} ![Word64]
+  , acStdevs       :: {-# UNPACK #-} ![Word64]
+  , acMeasurements :: {-# UNPACK #-} ![(Word64, Measurement)]
   }
 
 initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
@@ -1509,8 +1608,18 @@ initializeAcc menv b = do
                , Acc { acNumRepeats = 2 * n
                      , acMeans = (t `quot` n) !: []
                      , acStdevs = []
+                     , acMeasurements = [(n, meas)]
                      })
     {-# INLINE go #-}
+
+updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
+updateForNextRun ac sd m =
+  ac { acNumRepeats = acNumRepeats ac * 2
+     , acMeans = (measTime m `quot` acNumRepeats ac) !: acMeans ac
+     , acStdevs = (sd `quot` acNumRepeats ac) !: acStdevs ac
+     , acMeasurements = (acNumRepeats ac, m) !: acMeasurements ac
+     }
+{-# INLINE updateForNextRun #-}
 
 summarize :: Acc -> Measurement -> Estimate -> Summary
 summarize ac m2 (Estimate measN stdevN) =
@@ -1538,26 +1647,22 @@ summarize ac m2 (Estimate measN stdevN) =
       xs_and_ys = zipWith (\x y -> (x, x * word64ToDouble y)) niters means
       (ols, rsq) = regress stdev_all xs_and_ys
 
+      measured = reverse $ (acNumRepeats ac, m2) !: acMeasurements ac
+
   in  Summary { smEstimate = Estimate meas stdev_scaled
               , smOLS = ols
               , smR2 = rsq
               , smStdev = stdev_ranged
               , smMean = mean_ranged
+              , smMeasured = measured
               }
 {-# INLINE summarize #-}
 
-updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
-updateForNextRun ac sd m =
-  ac { acNumRepeats = acNumRepeats ac * 2
-     , acMeans = (measTime m `quot` acNumRepeats ac) !: acMeans ac
-     , acStdevs = (sd `quot` acNumRepeats ac) !: acStdevs ac
-     }
-{-# INLINE updateForNextRun #-}
-
 minMax :: [Word64] -> (Word64, Word64)
-minMax = foldr f (maxBound, minBound)
+minMax = foldr f z
   where
     f x (amin, amax) = (min amin x, max amax x)
+    z = (maxBound, minBound)
 {-# INLINABLE minMax #-}
 
 -- Apply bang pattern to the first argument, then (:).
