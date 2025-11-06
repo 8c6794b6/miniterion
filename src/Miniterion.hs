@@ -1069,17 +1069,19 @@ putSummaryJSON !idx name Summary{..} hdl = do
           ",\"confIntUDX\":" ++ show (hi - mid) ++
           "},\"estPoint\":" ++ show mid ++
           "}"
-        picoToSecs pico = word64ToDouble pico / 1e12
     keys =
       "[\"time\",\"iters\",\"allocated\",\"peakMbAllocated\",\"bytesCopied\"]"
     measured =
       "[" ++ intercalate "," (map meas_to_arr smMeasured) ++ "]"
       where
         meas_to_arr (n, Measurement t a c m) =
-          "[" ++ show t ++ "," ++ show n ++ "," ++
+          "[" ++ show (picoToSecs t) ++ "," ++ show n ++ "," ++
           (if a == 0 then "null" else show a) ++ "," ++
           (if m == 0 then "null" else show (m `quot` 1000000)) ++ "," ++
           (if c == 0 then "null" else show c) ++ "]"
+    picoToSecs pico =
+      word64ToDouble pico / 1e12
+
 {-# INLINABLE putSummaryJSON #-}
 
 
