@@ -1578,7 +1578,6 @@ warnOnTooLongBenchmark tout t_start t_now =
 
 data Acc = Acc
   { acNumRepeats   :: {-# UNPACK #-} !Word64
-  , acMeans        :: {-# UNPACK #-} ![Word64]
   , acStdevs       :: {-# UNPACK #-} ![Word64]
   , acMeasurements :: {-# UNPACK #-} ![(Word64, Measurement)]
   }
@@ -1608,7 +1607,6 @@ initializeAcc menv b = do
           debugStr' menv "*** Initialization done\n"
           pure ( meas
                , Acc { acNumRepeats = 2 * n
-                     , acMeans = (t `quot` n) !: []
                      , acStdevs = []
                      , acMeasurements = [(n, meas)]
                      })
@@ -1617,7 +1615,6 @@ initializeAcc menv b = do
 updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
 updateForNextRun ac sd m =
   ac { acNumRepeats = acNumRepeats ac * 2
-     , acMeans = (measTime m `quot` acNumRepeats ac) !: acMeans ac
      , acStdevs = (sd `quot` acNumRepeats ac) !: acStdevs ac
      , acMeasurements = (acNumRepeats ac, m) !: acMeasurements ac
      }
@@ -1625,20 +1622,18 @@ updateForNextRun ac sd m =
 
 summarize :: Acc -> Measurement -> Estimate -> Summary
 summarize ac m2 (Estimate measN stdevN) =
-  let Measurement meanN allocN copiedN maxMemN = measN
-      scale = (`quot` (acNumRepeats ac `quot` 2))
-      mean_scaled = scale meanN
-      meas = Measurement mean_scaled (scale allocN) (scale copiedN) maxMemN
+  let n1 = acNumRepeats ac `quot` 2
+      meas = scale n1 measN
+      measured = reverse $ (acNumRepeats ac, m2) !: acMeasurements ac
 
-      -- The list 'acMeans ac' contains normalized measurement values.
-      mean_m2 = measTime m2 `quot` acNumRepeats ac
-      means = reverse (mean_m2 !: acMeans ac)
+      -- The list 'means' contains normalized measurement values.
+      means = [measTime m `quot` n | (n, m) <- measured]
       (mean_min, mean_max) = minMax means
-      mean_ranged = Ranged mean_min mean_scaled mean_max
+      mean_ranged = Ranged mean_min (measTime meas) mean_max
 
       stdev_all = computeSSD means
       stdev_all_w64 = ceiling stdev_all
-      stdev_scaled = scale stdevN
+      stdev_scaled = stdevN `quot` n1
       sds = stdev_all_w64 !: stdev_scaled !: acStdevs ac
       (stdev_min, stdev_max) = minMax sds
       stdev_ranged = Ranged stdev_min stdev_all_w64 stdev_max
@@ -1649,8 +1644,6 @@ summarize ac m2 (Estimate measN stdevN) =
       xs_and_ys = zipWith (\x y -> (x, x * word64ToDouble y)) niters means
       (ols, rsq) = regress stdev_all xs_and_ys
 
-      measured = reverse $ (acNumRepeats ac, m2) !: acMeasurements ac
-
   in  Summary { smEstimate = Estimate meas stdev_scaled
               , smOLS = ols
               , smR2 = rsq
@@ -1659,6 +1652,14 @@ summarize ac m2 (Estimate measN stdevN) =
               , smMeasured = measured
               }
 {-# INLINE summarize #-}
+
+scale :: Word64 -> Measurement -> Measurement
+scale n (Measurement t a c m) = Measurement t' a' c' m
+  where
+    t' = t `quot` n
+    a' = a `quot` n
+    c' = c `quot` n
+{-# INLINE scale #-}
 
 minMax :: [Word64] -> (Word64, Word64)
 minMax = foldr f z
