@@ -1383,16 +1383,16 @@ data Timeout
   -- ^ Run without timeout.
 
 data Measurement = Measurement
-  { measTime   :: {-# UNPACK #-} !Word64 -- ^ time in picoseconds
-  , measAllocs :: {-# UNPACK #-} !Word64 -- ^ allocations in bytes
-  , measCopied :: {-# UNPACK #-} !Word64 -- ^ copied bytes
-  , measMaxMem :: {-# UNPACK #-} !Word64 -- ^ max memory in use
+  { measTime   :: !Word64 -- ^ time in picoseconds
+  , measAllocs :: !Word64 -- ^ allocations in bytes
+  , measCopied :: !Word64 -- ^ copied bytes
+  , measMaxMem :: !Word64 -- ^ max memory in use
   }
 
 -- | Measurement paired with end time.
 data Measured = Measured
-  { mdMeas     :: {-# UNPACK #-} !Measurement
-  , _mdEndTIme :: {-# UNPACK #-} !Word64
+  { mdMeas     :: !Measurement
+  , _mdEndTIme :: !Word64
   }
 
 instance Semigroup Measured where
@@ -1409,8 +1409,8 @@ instance Semigroup Measured where
   {-# INLINE (<>) #-}
 
 data Estimate = Estimate
-  { estMean  :: {-# UNPACK #-} !Measurement
-  , estStdev :: {-# UNPACK #-} !Word64 -- ^ stdev in picoseconds
+  { estMean  :: !Measurement
+  , estStdev :: !Word64 -- ^ stdev in picoseconds
   }
 
 type OLS = Ranged Word64
@@ -1419,11 +1419,11 @@ type Mean = Ranged Word64
 type Stdev = Ranged Word64
 
 data Summary = Summary
-  { smEstimate :: {-# UNPACK #-} !Estimate
-  , smOLS      :: {-# UNPACK #-} !OLS
-  , smR2       :: {-# UNPACK #-} !R2
-  , smStdev    :: {-# UNPACK #-} !Stdev
-  , smMean     :: {-# UNPACK #-} !Mean
+  { smEstimate :: !Estimate
+  , smOLS      :: !OLS
+  , smR2       :: !R2
+  , smStdev    :: !Stdev
+  , smMean     :: !Mean
   , smMeasured :: [(Word64, Measurement)]
     -- ^ Pair of iteration count and measurement.
   }
@@ -1576,8 +1576,13 @@ warnOnTooLongBenchmark tout t_start t_now =
 -- Accumulator for measureUntil
 -- ------------------------------------------------------------------------
 
+-- According to the UNPACK section of the ghc users guide, the two
+-- lists fields in Acc are Sum types, thus -funbox-strict-fields does
+-- not unpack them. Explicitly telling GHC to unpack the list fields,
+-- since the fields does not perform expensive computations.
+
 data Acc = Acc
-  { acNumRepeats   :: {-# UNPACK #-} !Word64
+  { acNumRepeats   :: !Word64
   , acStdevs       :: {-# UNPACK #-} ![Word64]
   , acMeasurements :: {-# UNPACK #-} ![(Word64, Measurement)]
   }
