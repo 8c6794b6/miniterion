@@ -1040,7 +1040,7 @@ putFailedJSON !idx name hdl = do
     "{\"reportAnalysis\":null" ++
     ",\"reportKeys\":null" ++
     ",\"reportMeasured\":null" ++
-    ",\"reportName\":" ++ show name ++
+    ",\"reportName\":" ++ escapeJSON name ++
     ",\"reportNumber\":" ++ show idx ++
     "}"
 {-# INLINABLE putFailedJSON #-}
@@ -1052,7 +1052,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
     "{\"reportAnalysis\":" ++ analysis ++
     ",\"reportKeys\":" ++ keys ++
     ",\"reportMeasured\":" ++ measured ++
-    ",\"reportName\":" ++ show name ++
+    ",\"reportName\":" ++ escapeJSON name ++
     ",\"reportNumber\":" ++ show idx ++
     "}"
   where
@@ -1081,9 +1081,24 @@ putSummaryJSON !idx name Summary{..} hdl = do
           (if c == 0 then "null" else show c) ++ "]"
     picoToSecs pico =
       word64ToDouble pico / 1e12
-
 {-# INLINABLE putSummaryJSON #-}
 
+-- Simplified variant of Criterion.Report.escapeJSON for String
+-- instead of Text. Does not escape plus character (@+@) and NULL
+-- (@\0@).
+escapeJSON :: String -> String
+escapeJSON xs = '"' : foldr f ['"'] xs
+  where
+    f '\n'     = ("\\n" ++)
+    f '\\'     = ("\\\\" ++)
+    f '"'      = ("\\\"" ++)
+    f '<'      = ("\\u003c" ++)
+    f '>'      = ("\\u003e" ++)
+    f '&'      = ("\\u0026" ++)
+    f '\x2028' = ("\\u2028" ++) -- line separator
+    f '\x2029' = ("\\u2029" ++) -- paragraph separator
+    f c        = (c:)
+{-# INLINABLE escapeJSON #-}
 
 -- ------------------------------------------------------------------------
 -- Configuration
