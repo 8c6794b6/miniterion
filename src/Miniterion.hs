@@ -1541,10 +1541,14 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
     init_and_go = do
       performGC
       start_time <- getTimePicoSecs cfgTimeMode
-      (m0, acc) <- initializeAcc menv b
-      go start_time m0 acc
+      Measured m0 _ <- measure menv 1 b
+      debugStr' menv $ formatMeasurement 1 m0
+      go start_time m0 (Acc { acNumRepeats = 2
+                            , acStdevs = []
+                            , acMeasurements = [(1, m0)]
+                            })
 
-    go start_time m1 !acc = do
+    go !start_time m1 !acc = do
       Measured m2 end_time <- measure menv (acNumRepeats acc) b
       debugStr' menv $ formatMeasurement (acNumRepeats acc) m2
 
@@ -1606,35 +1610,9 @@ data Acc = Acc
   , acMeasurements :: {-# UNPACK #-} ![(Word64, Measurement)]
   }
 
-initializeAcc :: MEnv -> Benchmarkable -> IO (Measurement, Acc)
-initializeAcc menv b = do
-  debugStr' menv "*** Starting initialization\n"
-  go 0 1
-  where
-    threshold = precision * 30
-    {-# INLINE threshold #-}
-
-    go :: Word64 -> Word64 -> IO (Measurement, Acc)
-    go !i !n = do
-      meas@(Measurement t _ _ _) <- fmap mdMeas (measure menv n b)
-      debugStr' menv $ formatMeasurement n meas
-
-      -- Discarding Measurement data when the total duration is
-      -- shorter than threshold. Too short measurement is considered
-      -- imprecise and unreliable. When the total duration is less
-      -- than 2 * threshold and iteration is less than twice,
-      -- considering that the warming up is not enough, running the
-      -- measurement again.
-      if t < threshold || (i < 2 && t < threshold * 2)
-        then go (i + 1) (n * 2)
-        else do
-          debugStr' menv "*** Initialization done\n"
-          pure ( meas
-               , Acc { acNumRepeats = 2 * n
-                     , acStdevs = []
-                     , acMeasurements = [(n, meas)]
-                     })
-    {-# INLINE go #-}
+threshold :: Word64
+threshold = precision * 30
+{-# INLINE threshold #-}
 
 updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
 updateForNextRun ac sd m =
@@ -1650,23 +1628,23 @@ summarize ac m2 (Estimate measN stdevN) =
       meas = scale n1 measN
       measured = reverse $ (acNumRepeats ac, m2) !: acMeasurements ac
 
-      -- The list 'means' contains normalized measurement values.
-      means = [measTime m `quot` n | (n, m) <- measured]
+      -- The list 'means' contains normalized measurement
+      -- values. Filtering out too measurement with too short total
+      -- duration, since those data are considered imprecise and
+      -- unreliable.
+      means = [measTime m `quot` n | (n,m) <- measured, threshold < measTime m]
       (mean_min, mean_max) = minMax means
       mean_ranged = Ranged mean_min (measTime meas) mean_max
 
-      stdev_all = computeSSD means
+      !stdev_all = computeSSD means
       stdev_all_w64 = ceiling stdev_all
       stdev_scaled = stdevN `quot` n1
       sds = stdev_all_w64 !: stdev_scaled !: acStdevs ac
       (stdev_min, stdev_max) = minMax sds
       stdev_ranged = Ranged stdev_min stdev_all_w64 stdev_max
 
-      -- In the list of normalized means, each value is computed from
-      -- twice the number of repeats than the previous value.
-      niters = iterate (* 2) 1
-      xs_and_ys = zipWith (\x y -> (x, x * word64ToDouble y)) niters means
-      (ols, rsq) = regress stdev_all xs_and_ys
+      to_xy (n,m) = (word64ToDouble n, word64ToDouble (measTime m))
+      (ols, rsq) = regress stdev_all (map to_xy measured)
 
   in  Summary { smEstimate = Estimate meas stdev_scaled
               , smOLS = ols
@@ -1751,11 +1729,13 @@ regress ssd xs_and_ys = (ols, r2)
 
 -- | Compute sample standard deviation.
 computeSSD :: [Word64] -> Double
-computeSSD normalized_means =
-  let n = fromIntegral (length normalized_means)
-      ys = map word64ToDouble normalized_means
-      y_mean = sum ys / n
-  in  sqrt (sum [square (y - y_mean) | y <- ys] / (n - 1))
+computeSSD [_] = 0
+computeSSD xs = ssd
+  where
+    n = fromIntegral (length xs)
+    xs' = map word64ToDouble xs
+    x_mean = sum xs' / n
+    ssd = sqrt (sum [square (x - x_mean) | x <- xs'] / (n - 1))
 {-# INLINABLE computeSSD #-}
 
 -- | Compute 95% confidence interval from sample standard deviation.
