@@ -1038,6 +1038,7 @@ putFailedJSON !idx name hdl = do
   when (idx /= 0) $ hPutStr hdl ","
   hPutStr hdl $
     "{\"reportAnalysis\":null" ++
+    ",\"reportKDEs\":null" ++
     ",\"reportKeys\":null" ++
     ",\"reportMeasured\":null" ++
     ",\"reportName\":" ++ escapeJSON name ++
@@ -1050,6 +1051,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
   when (idx /= 0) $ hPutStr hdl ","
   hPutStr hdl $
     "{\"reportAnalysis\":" ++ analysis ++
+    ",\"reportKDEs\":" ++ emptyKDEs ++
     ",\"reportKeys\":" ++ keys ++
     ",\"reportMeasured\":" ++ measured ++
     ",\"reportName\":" ++ escapeJSON name ++
@@ -1069,6 +1071,8 @@ putSummaryJSON !idx name Summary{..} hdl = do
           ",\"confIntUDX\":" ++ show (hi - mid) ++
           "},\"estPoint\":" ++ show mid ++
           "}"
+    emptyKDEs =
+      "[{\"kdePDF\":[],\"kdeType\":\"time\",\"kdeValues\":[]}]"
     keys =
       "[\"time\",\"iters\",\"allocated\",\"peakMbAllocated\",\"bytesCopied\"]"
     measured =
