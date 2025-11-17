@@ -242,11 +242,6 @@ perBatchEnvWithCleanup alloc clean run = Benchmarkable alloc clean run' False
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perRunEnv perRunEnv>@.
 --
--- __NOTE__: This function does not work well (or not work at all) if
--- the time spent in the initialization work is relatively long
--- compared to the time spent in the benchmark body function. In such
--- case, consider modifying the benchmark body function to spend more
--- elapsed time, or switch to the @criterion@ package.
 perRunEnv
   :: (NFData env, NFData b)
   => IO env -- ^ Action to create an environment for a single run.
@@ -259,7 +254,6 @@ perRunEnv alloc = perRunEnvWithCleanup alloc noop
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perRunEnvWithCleanup perRunEnvWithCleanup>@.
 --
--- __NOTE__: See the note in 'perRunEnv'.
 perRunEnvWithCleanup
   :: (NFData env, NFData b)
   => IO env -- ^ Action to create an environment for a single run.
@@ -1019,8 +1013,8 @@ encodeCsv xs
 -- ------------------------------------------------------------------------
 
 -- The JSON report made by Miniterion differs from the one made by
--- Criterion. Some of the keys are missing (e.g., KDE, outlier). Some
--- of the keys have the same names but the meaning differs (e.g.,
+-- Criterion. Some of the keys are missing (e.g., outlier). Some of
+-- the keys have the same names but the meaning differs (e.g.,
 -- confIntLDX, confIntUDX). Hope that the use of the same names will
 -- help reusing the JSON parser between Miniterion and Criterion.
 
