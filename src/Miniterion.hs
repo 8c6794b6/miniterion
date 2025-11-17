@@ -574,7 +574,7 @@ runBenchmarkable idx fullname b = do
 
   let (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
-        Just (Summary est _ _ _ _ _) ->
+        Just (Summary {smEstimate=est}) ->
           case compareVsBaseline meBaselineSet fullname est of
             Nothing  -> (Done, Nothing)
             Just cmp ->
@@ -671,22 +671,22 @@ formatResult _ Nothing _ =
 formatResult res (Just summary) mb_cmp =
   fail_or_blank <> "\n" <>
   --
-  white "time                 " <> showPicos5 (irMid ols)   <> "   " <>
-  show_minmax (irLo ols) (irHi ols) <>
+  white "time                 " <> showPicos5 (irMid smOLS)   <> "   " <>
+  show_minmax (irLo smOLS) (irHi smOLS) <>
   maybe "" (formatSlowDown res) mb_cmp <> "\n" <>
   --
-  id    "                     " <> rsq_str id (irMid rsq) <> "   " <>
+        "                     " <> rsq_str id (irMid smR2) <> "   " <>
   show_minmax_rsq <> "\n" <>
   --
-  white "mean                 " <> showPicos5 (irMid mean) <> "   " <>
-  show_minmax (irLo mean) (irHi mean) <> "\n" <>
+  white "mean                 " <> showPicos5 (irMid smMean) <> "   " <>
+  show_minmax (irLo smMean) (irHi smMean) <> "\n" <>
   --
-  white "std dev              " <> showPicos5 (2 * irMid sd) <> "   " <>
-  show_minmax (2 * irLo sd) (2 * irHi sd) <>
+  white "std dev              " <> showPicos5 (2 * irMid smStdev) <> "   " <>
+  show_minmax (2 * irLo smStdev) (2 * irHi smStdev) <>
   --
   formatGC m <> "\n\n"
   where
-    Summary (Estimate m _) ols rsq sd mean _ = summary
+    Summary {smEstimate=Estimate m _, ..} = summary
     fail_or_blank
       | isTooFast res || isTooSlow res = boldRed "FAIL"
       | otherwise = ""
@@ -698,8 +698,8 @@ formatResult res (Just summary) mb_cmp =
               | val < 0.99 = yellow
               | otherwise = on_other
     show_minmax_rsq =
-      white "(" <> rsq_str white (irLo rsq) <> white " .. " <>
-      rsq_str white (irHi rsq) <> white ")"
+      white "(" <> rsq_str white (irLo smR2) <> white " .. " <>
+      rsq_str white (irHi smR2) <> white ")"
 
 formatSlowDown :: Result -> Double -> Doc
 formatSlowDown result ratio = case percents `compare` 0 of
@@ -948,15 +948,15 @@ putCsvLine has_gc name summary hdl =
   hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary has_gc summary)
 
 csvSummary :: Bool -> Summary -> String
-csvSummary has_gc (Summary (Estimate m _) _ols _rsq stdev mean _)
+csvSummary has_gc (Summary {smEstimate=Estimate m _, ..})
   | has_gc    = time ++ "," ++ gc
   | otherwise = time
   where
     time =
       show (measTime m) ++ "," ++
-      show (irLo mean) ++ "," ++ show (irHi mean) ++ "," ++
-      show (2 * irMid stdev) ++ "," ++
-      show (2 * irLo stdev) ++ "," ++ show (2 * irHi stdev)
+      show (irLo smMean) ++ "," ++ show (irHi smMean) ++ "," ++
+      show (2 * irMid smStdev) ++ "," ++
+      show (2 * irLo smStdev) ++ "," ++ show (2 * irHi smStdev)
     gc =
       show (measAllocs m) ++ "," ++ show (measCopied m) ++ "," ++
       show (measMaxMem m)
@@ -1051,7 +1051,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
   when (idx /= 0) $ hPutStr hdl ","
   hPutStr hdl $
     "{\"reportAnalysis\":" ++ analysis ++
-    ",\"reportKDEs\":" ++ emptyKDEs ++
+    ",\"reportKDEs\":" ++ kdes ++
     ",\"reportKeys\":" ++ keys ++
     ",\"reportMeasured\":" ++ measured ++
     ",\"reportName\":" ++ escapeJSON name ++
@@ -1071,8 +1071,11 @@ putSummaryJSON !idx name Summary{..} hdl = do
           ",\"confIntUDX\":" ++ show (hi - mid) ++
           "},\"estPoint\":" ++ show mid ++
           "}"
-    emptyKDEs =
-      "[{\"kdePDF\":[],\"kdeType\":\"time\",\"kdeValues\":[]}]"
+    kdes =
+      "[{\"kdePDF\":" ++ show (kdPDF smKDEs) ++
+      ",\"kdeType\":\"time\"" ++
+      ",\"kdeValues\":" ++ show (kdValues smKDEs) ++
+      "}]"
     keys =
       "[\"time\",\"iters\",\"allocated\",\"peakMbAllocated\",\"bytesCopied\"]"
     measured =
@@ -1437,12 +1440,18 @@ type R2 = Ranged Double
 type Mean = Ranged Word64
 type Stdev = Ranged Word64
 
+data KDE = KDE
+  { kdValues :: {-# UNPACK #-} ![Double]
+  , kdPDF    :: {-# UNPACK #-} ![Double]
+  }
+
 data Summary = Summary
   { smEstimate :: !Estimate
   , smOLS      :: !OLS
   , smR2       :: !R2
   , smStdev    :: !Stdev
   , smMean     :: !Mean
+  , smKDEs     :: KDE
   , smMeasured :: [(Word64, Measurement)]
     -- ^ Pair of iteration count and measurement.
   }
@@ -1566,13 +1575,15 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
         else go start_time m2 (updateForNextRun acc stdevN m2)
 
 measToSummary :: Measurement -> Summary
-measToSummary m@(Measurement t _ _ _) = Summary est mean stdev med rsq []
-  where
-    est = Estimate m 0
-    mean = toRanged t
-    stdev = toRanged 0
-    med = toRanged t
-    rsq = toRanged 1
+measToSummary m@(Measurement t _ _ _) =
+  Summary { smEstimate = Estimate m 0
+          , smOLS = toRanged t
+          , smR2 = toRanged 1
+          , smStdev = toRanged 0
+          , smMean =  toRanged t
+          , smKDEs = KDE [] []
+          , smMeasured = []
+          }
 {-# INLINABLE measToSummary #-}
 
 timeoutSoon :: Timeout -> Word64 -> Word64 -> Bool
@@ -1631,7 +1642,7 @@ summarize ac m2 (Estimate measN stdevN) =
       -- The list 'means' contains normalized measurement
       -- values. Filtering out too measurement with too short total
       -- duration, since those data are considered imprecise and
-      -- unreliable.
+      -- unreliable. See 'Criterion.Analysis.analyseSample'.
       means = [measTime m `quot` n | (n,m) <- measured, threshold < measTime m]
       (mean_min, mean_max) = minMax means
       mean_ranged = Ranged mean_min (measTime meas) mean_max
@@ -1651,6 +1662,7 @@ summarize ac m2 (Estimate measN stdevN) =
               , smR2 = rsq
               , smStdev = stdev_ranged
               , smMean = mean_ranged
+              , smKDEs = computeKDE mean_ranged means
               , smMeasured = measured
               }
 {-# INLINE summarize #-}
@@ -1748,6 +1760,34 @@ ci95 n ssd x =
       w = se * 1.96
   in  Ranged (x - w) x (x + w)
 {-# INLINABLE ci95 #-}
+
+computeKDE :: Mean -> [Word64] -> KDE
+computeKDE !mean_w64 xs_w64 = KDE {kdValues=values, kdPDF=pdfs}
+  where
+    values = enumFromThenTo lo' (lo'+delta) hi'
+      where
+        delta = (hi' - lo') / 127
+        lo' = lo - r/10
+        hi' = hi + r/10
+        r | hi == lo  = 1
+          | otherwise = hi - lo
+    --
+    pdfs = [ sum [k ((x - to_secs xi) / h) | xi <- xs_w64] / (n*h)
+           | x <- values ]
+      where
+        -- Gaussian kernel function
+        k !x = exp (-(x**2/2)) / sqrt (2*pi)
+        !n = fromIntegral (length xs_w64)
+        -- Silverman's rule of thumb
+        h = 0.9 * min sd iqr * (n ** (-1/5))
+        -- This interquartile range is not Q3 - Q1, but half the size
+        -- of the whole range.
+        iqr = (hi - lo) / (2 * 1.34)
+        sd = sqrt (sum [square (to_secs x - mid) | x <- xs_w64] / n)
+    --
+    Ranged lo mid hi = fmap to_secs mean_w64
+    to_secs !x = word64ToDouble x / 1e12
+{-# INLINABLE computeKDE #-}
 
 
 -- ------------------------------------------------------------------------
