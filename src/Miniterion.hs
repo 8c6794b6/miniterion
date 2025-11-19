@@ -973,6 +973,7 @@ joinQuotedFields (x : xs)
     areQuotesBalanced = even . length . filter (== '"')
 
 compareVsBaseline :: Baseline -> String -> Estimate -> Maybe Double
+compareVsBaseline []       _     _                 = Nothing
 compareVsBaseline baseline name (Estimate m stdev) = fmap comp mb_old
   where
     comp (old_time, old_sigma_x_2) =
