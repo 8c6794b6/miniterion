@@ -82,7 +82,7 @@ import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Char              (toLower)
 import           Data.Foldable          (find, foldlM)
 import           Data.Int               (Int64)
-import           Data.List              (intercalate, isPrefixOf, nub,
+import           Data.List              (intercalate, isPrefixOf, nub, sort,
                                          stripPrefix, tails)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
@@ -1764,24 +1764,22 @@ computeKDE !mean_w64 xs_w64 = KDE {kdValues=values, kdPDF=pdfs}
         delta = (hi' - lo') / 127
         lo' = lo - r/10
         hi' = hi + r/10
-        r | hi == lo  = 1
-          | otherwise = hi - lo
-    --
-    pdfs = [ sum [k ((x - to_secs xi) / h) | xi <- xs_w64] / (n*h)
+        r = hi - lo
+    pdfs = [ sum [k ((x - xi) / h) | xi <- xs] / (n*h)
            | x <- values ]
       where
-        -- Gaussian kernel function
-        k !x = exp (-(x**2/2)) / sqrt (2*pi)
+        -- Gaussian kernel
+        k x = exp (-(square x / 2)) / sqrt (2*pi)
+        -- Silverman's rule-of-thumb
+        h = 0.9 * min sd (iqr/1.34) * (n**(-0.2))
+        !iqr = q3 - q1
+        q3 = xs !! ceiling (n*0.75)
+        q1 = xs !! truncate (n*0.25)
+        sd = sqrt (sum [square (x - mid) | x <- xs] / n)
+        xs = sort $ map to_secs xs_w64
         !n = fromIntegral (length xs_w64)
-        -- Silverman's rule of thumb
-        h = 0.9 * min sd iqr * (n ** (-1/5))
-        -- This interquartile range is not Q3 - Q1, but half the size
-        -- of the whole range.
-        iqr = (hi - lo) / (2 * 1.34)
-        sd = sqrt (sum [square (to_secs x - mid) | x <- xs_w64] / n)
-    --
     Ranged lo mid hi = fmap to_secs mean_w64
-    to_secs !x = word64ToDouble x / 1e12
+    to_secs x = word64ToDouble x / 1e12
 {-# INLINABLE computeKDE #-}
 
 
