@@ -730,7 +730,8 @@ showPicos5 i
     print_mu fmt = Doc (printf fmt (t / 1e6) . mu)
 
 formatGC :: Measurement -> Doc
-formatGC (Measurement _ a c p) = Doc $ \ !e ->
+formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
+  Doc $ \ !e ->
   if meHasGCStats e then
     let sb !b = fromString $! showBytes b
     in  docToString e $ "\n" <>
@@ -758,8 +759,8 @@ showBytes i
   where
     t = word64ToDouble i
 
-formatMeasurement :: Word64 -> Measurement -> Doc
-formatMeasurement n (Measurement t a c m) =
+formatMeasurement :: Measurement -> Doc
+formatMeasurement (Measurement n t a c m) =
   fromString (show n) <>
   (if n == 1 then " iteration gives " else " iteragions give ") <>
   showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
@@ -1076,7 +1077,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
     measured =
       "[" ++ intercalate "," (map meas_to_arr smMeasured) ++ "]"
       where
-        meas_to_arr (n, Measurement t a c m) =
+        meas_to_arr (Measurement n t a c m) =
           "[" ++ show (picoToSecs t) ++ "," ++ show n ++ "," ++
           (if a == 0 then "null" else show a) ++ "," ++
           (if m == 0 then "null" else show (m `quot` 1000000)) ++ "," ++
@@ -1400,7 +1401,8 @@ data Timeout
   -- ^ Run without timeout.
 
 data Measurement = Measurement
-  { measTime   :: !Word64 -- ^ time in picoseconds
+  { measIters  :: !Word64 -- ^ number of iterations
+  , measTime   :: !Word64 -- ^ time in picoseconds
   , measAllocs :: !Word64 -- ^ allocations in bytes
   , measCopied :: !Word64 -- ^ copied bytes
   , measMaxMem :: !Word64 -- ^ max memory in use
@@ -1418,7 +1420,8 @@ instance Semigroup Measured where
       on h g = h (g m1) (g m2)
       add = on (+)
       max_of = on max
-      m3 = Measurement { measTime = add measTime
+      m3 = Measurement { measIters = measIters m2
+                       , measTime = add measTime
                        , measAllocs = add measAllocs
                        , measCopied = add measCopied
                        , measMaxMem = max_of measMaxMem
@@ -1447,8 +1450,7 @@ data Summary = Summary
   , smStdev    :: !Stdev
   , smMean     :: !Mean
   , smKDEs     :: KDE
-  , smMeasured :: [(Word64, Measurement)]
-    -- ^ Pair of iteration count and measurement.
+  , smMeasured :: [Measurement]
   }
 
 square :: Num a => a -> a
@@ -1459,8 +1461,9 @@ predict
   :: Measurement -- ^ time for @n@ run
   -> Measurement -- ^ time for @2*n@ runs
   -> Estimate
-predict (Measurement t1 a1 c1 m1) (Measurement t2 a2 c2 m2) = Estimate
-  { estMean  = Measurement t (fit a1 a2) (fit c1 c2) (max m1 m2)
+
+predict (Measurement n1 t1 a1 c1 m1) (Measurement _ t2 a2 c2 m2) = Estimate
+  { estMean  = Measurement n1 t (fit a1 a2) (fit c1 c2) (max m1 m2)
   , estStdev = truncate (sqrt d)
   }
   where
@@ -1527,7 +1530,8 @@ measure MEnv{meConfig=cfg, meHasGCStats=gc} num b =
     (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied gc
 
     let meas = Measurement
-          { measTime = end_time - start_time
+          { measIters = num
+          , measTime = end_time - start_time
           , measAllocs = end_allocs - start_allocs
           , measCopied = end_copied - start_copied
           , measMaxMem = max end_max_mem start_max_mem
@@ -1546,15 +1550,15 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       performGC
       start_time <- getTimePicoSecs cfgTimeMode
       Measured m0 _ <- measure menv 1 b
-      debugStr' menv $ formatMeasurement 1 m0
+      debugStr' menv $ formatMeasurement m0
       go start_time m0 (Acc { acNumRepeats = 2
                             , acStdevs = []
-                            , acMeasurements = [(1, m0)]
+                            , acMeasurements = [m0]
                             })
 
     go !start_time m1 !acc = do
       Measured m2 end_time <- measure menv (acNumRepeats acc) b
-      debugStr' menv $ formatMeasurement (acNumRepeats acc) m2
+      debugStr' menv $ formatMeasurement m2
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           meanN = measTime measN
@@ -1565,12 +1569,16 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
 
       warnOnTooLongBenchmark cfgTimeout start_time end_time
 
-      if is_stdev_in_target_range || is_timeout_soon
+      -- Comparing threshold and normalized mean to get at least two
+      -- measurement data in the accumulator. Otherwise, the JSON
+      -- output will contain NaN values in KDE.
+      if threshold < meanN &&
+         (is_stdev_in_target_range || is_timeout_soon)
         then pure $ summarize acc m2 est
         else go start_time m2 (updateForNextRun acc stdevN m2)
 
 measToSummary :: Measurement -> Summary
-measToSummary m@(Measurement t _ _ _) =
+measToSummary m@(Measurement {measTime=t}) =
   Summary { smEstimate = Estimate m 0
           , smOLS = toRanged t
           , smR2 = toRanged 1
@@ -1613,7 +1621,7 @@ warnOnTooLongBenchmark tout t_start t_now =
 data Acc = Acc
   { acNumRepeats   :: !Word64
   , acStdevs       :: {-# UNPACK #-} ![Word64]
-  , acMeasurements :: {-# UNPACK #-} ![(Word64, Measurement)]
+  , acMeasurements :: {-# UNPACK #-} ![Measurement]
   }
 
 threshold :: Word64
@@ -1624,21 +1632,22 @@ updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
 updateForNextRun ac sd m =
   ac { acNumRepeats = acNumRepeats ac * 2
      , acStdevs = (sd `quot` acNumRepeats ac) !: acStdevs ac
-     , acMeasurements = (acNumRepeats ac, m) !: acMeasurements ac
+     , acMeasurements = m !: acMeasurements ac
      }
 {-# INLINE updateForNextRun #-}
 
 summarize :: Acc -> Measurement -> Estimate -> Summary
 summarize ac m2 (Estimate measN stdevN) =
   let n1 = acNumRepeats ac `quot` 2
-      meas = scale n1 measN
-      measured = reverse $ (acNumRepeats ac, m2) !: acMeasurements ac
+      meas = scale measN
+      measured = reverse $ m2 !: acMeasurements ac
 
       -- The list 'means' contains normalized measurement
       -- values. Filtering out too measurement with too short total
       -- duration, since those data are considered imprecise and
       -- unreliable. See 'Criterion.Analysis.analyseSample'.
-      means = [measTime m `quot` n | (n,m) <- measured, threshold < measTime m]
+      means = [ measTime m `quot` measIters m
+              | m <- measured, threshold < measTime m ]
       (mean_min, mean_max) = minMax means
       mean_ranged = Ranged mean_min (measTime meas) mean_max
 
@@ -1649,7 +1658,7 @@ summarize ac m2 (Estimate measN stdevN) =
       (stdev_min, stdev_max) = minMax sds
       stdev_ranged = Ranged stdev_min stdev_all_w64 stdev_max
 
-      to_xy (n,m) = (word64ToDouble n, word64ToDouble (measTime m))
+      to_xy m = (word64ToDouble (measIters m), word64ToDouble (measTime m))
       (ols, rsq) = regress stdev_all (map to_xy measured)
 
   in  Summary { smEstimate = Estimate meas stdev_scaled
@@ -1662,8 +1671,8 @@ summarize ac m2 (Estimate measN stdevN) =
               }
 {-# INLINE summarize #-}
 
-scale :: Word64 -> Measurement -> Measurement
-scale n (Measurement t a c m) = Measurement t' a' c' m
+scale :: Measurement -> Measurement
+scale (Measurement n t a c m) = Measurement n t' a' c' m
   where
     t' = t `quot` n
     a' = a `quot` n
