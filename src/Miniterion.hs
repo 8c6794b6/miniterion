@@ -83,7 +83,7 @@ import           Data.Char              (toLower)
 import           Data.Foldable          (find, foldlM)
 import           Data.Int               (Int64)
 import           Data.List              (intercalate, isPrefixOf, nub, sort,
-                                         stripPrefix, tails)
+                                         stripPrefix, tails, unfoldr)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
 import           GHC.Clock              (getMonotonicTime)
@@ -1458,19 +1458,22 @@ square x = x * x
 {-# INLINE square #-}
 
 predict
-  :: Measurement -- ^ time for @n@ run
-  -> Measurement -- ^ time for @2*n@ runs
+  :: Measurement -- ^ time for the previous run
+  -> Measurement -- ^ time for the current run
   -> Estimate
-
-predict (Measurement n1 t1 a1 c1 m1) (Measurement _ t2 a2 c2 m2) = Estimate
+predict (Measurement n1 t1 a1 c1 m1) (Measurement n2 t2 a2 c2 m2) = Estimate
   { estMean  = Measurement n1 t (fit a1 a2) (fit c1 c2) (max m1 m2)
   , estStdev = truncate (sqrt d)
   }
   where
-    fit x1 x2 = x1 `quot` 5 + 2 * (x2 `quot` 5)
-    t = fit t1 t2
-    t' = word64ToDouble t
-    d = square (word64ToDouble t1 - t') + square (word64ToDouble t2 - 2 * t')
+    !t = fit t1 t2
+    fit x1 x2 = n1 * (x1 `quot` n3 + x2 `quot` n3)
+      where
+        n3 = n1 + n2
+    d = square (word64ToDouble t1 - t') + square (word64ToDouble t2 - r * t')
+      where
+        r = word64ToDouble n2 / word64ToDouble n1
+        t' = word64ToDouble t
 
 predictPerturbed :: Measurement -> Measurement -> Estimate
 predictPerturbed t1 t2 = Estimate
@@ -1551,13 +1554,17 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       start_time <- getTimePicoSecs cfgTimeMode
       Measured m0 _ <- measure menv 1 b
       debugStr' menv $ formatMeasurement m0
-      go start_time m0 (Acc { acNumRepeats = 2
-                            , acStdevs = []
-                            , acMeasurements = [m0]
-                            })
+      go start_time m0 series (Acc {acStdevs=[], acMeasurements=[m0]})
 
-    go !start_time m1 !acc = do
-      Measured m2 end_time <- measure menv (acNumRepeats acc) b
+    series = squish (unfoldr f 2)
+      where
+        squish ys = foldr g [] ys
+          where g x xs = x : dropWhile (== x) xs
+        f k = Just (truncate l, l)
+          where l = k * 1.05 :: Double
+
+    go !start_time m1 (!n:ns) !acc = do
+      Measured m2 end_time <- measure menv n b
       debugStr' menv $ formatMeasurement m2
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
@@ -1575,7 +1582,8 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       if threshold < meanN &&
          (is_stdev_in_target_range || is_timeout_soon)
         then pure $ summarize acc m2 est
-        else go start_time m2 (updateForNextRun acc stdevN m2)
+        else go start_time m2 ns (updateForNextRun acc (stdevN `quot` n) m2)
+    go _ _ _ _ = error "measureUntil.go: should not happen"
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement {measTime=t}) =
@@ -1619,8 +1627,7 @@ warnOnTooLongBenchmark tout t_start t_now =
 -- since the fields does not perform expensive computations.
 
 data Acc = Acc
-  { acNumRepeats   :: !Word64
-  , acStdevs       :: {-# UNPACK #-} ![Word64]
+  { acStdevs       :: {-# UNPACK #-} ![Word64]
   , acMeasurements :: {-# UNPACK #-} ![Measurement]
   }
 
@@ -1630,16 +1637,14 @@ threshold = precision * 30
 
 updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
 updateForNextRun ac sd m =
-  ac { acNumRepeats = acNumRepeats ac * 2
-     , acStdevs = (sd `quot` acNumRepeats ac) !: acStdevs ac
+  ac { acStdevs = sd !: acStdevs ac
      , acMeasurements = m !: acMeasurements ac
      }
 {-# INLINE updateForNextRun #-}
 
 summarize :: Acc -> Measurement -> Estimate -> Summary
 summarize ac m2 (Estimate measN stdevN) =
-  let n1 = acNumRepeats ac `quot` 2
-      meas = scale measN
+  let meas = scale measN
       measured = reverse $ m2 !: acMeasurements ac
 
       -- The list 'means' contains normalized measurement
@@ -1653,7 +1658,7 @@ summarize ac m2 (Estimate measN stdevN) =
 
       !stdev_all = computeSSD means
       stdev_all_w64 = ceiling stdev_all
-      stdev_scaled = stdevN `quot` n1
+      stdev_scaled = stdevN `quot` measIters measN
       sds = stdev_all_w64 !: stdev_scaled !: acStdevs ac
       (stdev_min, stdev_max) = minMax sds
       stdev_ranged = Ranged stdev_min stdev_all_w64 stdev_max
