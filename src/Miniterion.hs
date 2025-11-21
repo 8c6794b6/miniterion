@@ -1558,10 +1558,17 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
 
     series = squish (unfoldr f 2)
       where
-        squish ys = foldr g [] ys
+        squish = foldr g []
           where g x xs = x : dropWhile (== x) xs
         f k = Just (truncate l, l)
           where l = k * 1.05 :: Double
+
+    -- Calculated with: threshold * 1.11 (~= 1.05^2), duration for
+    -- threshold value plus at least two more iterations in below 'go'
+    -- function. Assuming that one millisecond is longer than CPU time
+    -- precision. Comparing measured time with this value to avoid
+    -- index too large error from `(!!)' while generating JSON output.
+    threshold_and_two_more_iters = 33300000000
 
     go !start_time m1 (!n:ns) !acc = do
       Measured m2 end_time <- measure menv n b
@@ -1569,20 +1576,20 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
 
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           meanN = measTime measN
-          end_time' = end_time + measTime m2 * 2 + (30 * oneMillisecond)
+          end_time' = end_time + (measTime m2 * 2) + (30 * oneMillisecond)
           is_timeout_soon = timeoutSoon cfgTimeout start_time end_time'
           target_stdev = truncate (cfgRelStDev * word64ToDouble meanN)
           is_stdev_in_target_range = stdevN < target_stdev
+          acc' = acc { acStdevs = (stdevN `quot` n) : acStdevs acc
+                     , acMeasurements = m2 : acMeasurements acc }
 
       warnOnTooLongBenchmark cfgTimeout start_time end_time
 
-      -- Comparing threshold and normalized mean to get at least two
-      -- measurement data in the accumulator. Otherwise, the JSON
-      -- output will contain NaN values in KDE.
-      if threshold < meanN &&
+      if threshold_and_two_more_iters < meanN &&
          (is_stdev_in_target_range || is_timeout_soon)
         then pure $ summarize acc m2 est
-        else go start_time m2 ns (updateForNextRun acc (stdevN `quot` n) m2)
+        else go start_time m2 ns acc'
+
     go _ _ _ _ = error "measureUntil.go: should not happen"
 
 measToSummary :: Measurement -> Summary
@@ -1631,49 +1638,43 @@ data Acc = Acc
   , acMeasurements :: {-# UNPACK #-} ![Measurement]
   }
 
+-- | 30 milliseconds in picosecond.
 threshold :: Word64
-threshold = precision * 30
+threshold = 30000000000
 {-# INLINE threshold #-}
 
-updateForNextRun :: Acc -> Word64 -> Measurement -> Acc
-updateForNextRun ac sd m =
-  ac { acStdevs = sd !: acStdevs ac
-     , acMeasurements = m !: acMeasurements ac
-     }
-{-# INLINE updateForNextRun #-}
-
 summarize :: Acc -> Measurement -> Estimate -> Summary
-summarize ac m2 (Estimate measN stdevN) =
-  let meas = scale measN
-      measured = reverse $ m2 !: acMeasurements ac
+summarize acc m2 (Estimate measN stdevN) = Summary
+  { smEstimate = Estimate meas sd_scaled
+  , smOLS = ols
+  , smR2 = rsq
+  , smStdev = Ranged sd_min sd_all_w64 sd_max
+  , smMean = mean_r
+  , smKDEs = computeKDE mean_r sd_all len means
+  , smMeasured = measured
+  }
+  where
+    meas = scale measN
+    measured = reverse $ m2 : acMeasurements acc
 
-      -- The list 'means' contains normalized measurement
-      -- values. Filtering out too measurement with too short total
-      -- duration, since those data are considered imprecise and
-      -- unreliable. See 'Criterion.Analysis.analyseSample'.
-      means = [ measTime m `quot` measIters m
-              | m <- measured, threshold < measTime m ]
-      (mean_min, mean_max) = minMax means
-      mean_ranged = Ranged mean_min (measTime meas) mean_max
+    -- The list 'means' contains normalized measurement time
+    -- values. Filtering out measurements with too short total
+    -- duration, since those data are considered imprecise and
+    -- unreliable. See 'Criterion.Analysis.analyseSample'.
+    means = [ measTime m `quot` measIters m
+            | m <- measured, threshold < measTime m ]
+    !len = fromIntegral (length means)
+    (mean_min, mean_max) = minMax means
+    mean_r = Ranged mean_min (measTime meas) mean_max
 
-      !stdev_all = computeSSD means
-      stdev_all_w64 = ceiling stdev_all
-      stdev_scaled = stdevN `quot` measIters measN
-      sds = stdev_all_w64 !: stdev_scaled !: acStdevs ac
-      (stdev_min, stdev_max) = minMax sds
-      stdev_ranged = Ranged stdev_min stdev_all_w64 stdev_max
+    !sd_all = computeSSD len means
+    !sd_all_w64 = ceiling sd_all
+    !sd_scaled = stdevN `quot` measIters measN
+    (sd_min, sd_max) = minMax (sd_all_w64 : sd_scaled : acStdevs acc)
 
-      to_xy m = (word64ToDouble (measIters m), word64ToDouble (measTime m))
-      (ols, rsq) = regress stdev_all (map to_xy measured)
-
-  in  Summary { smEstimate = Estimate meas stdev_scaled
-              , smOLS = ols
-              , smR2 = rsq
-              , smStdev = stdev_ranged
-              , smMean = mean_ranged
-              , smKDEs = computeKDE mean_ranged means
-              , smMeasured = measured
-              }
+    (ols, rsq) = regress sd_all xys
+    xys = [ (word64ToDouble (measIters m), word64ToDouble (measTime m))
+          | m <- measured ]
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1690,13 +1691,6 @@ minMax = foldr f z
     f x (amin, amax) = (min amin x, max amax x)
     z = (maxBound, minBound)
 {-# INLINABLE minMax #-}
-
--- Apply bang pattern to the first argument, then (:).
-(!:) :: a -> [a] -> [a]
-!x !: xs = x : xs
-{-# INLINE (!:) #-}
-
-infixr 5 !:
 
 
 -- ------------------------------------------------------------------------
@@ -1721,14 +1715,16 @@ toRanged x = Ranged x x x
 -- ------------------------------------------------------------------------
 
 -- | Simple linear regression with ordinary least square.
-regress :: Double -> [(Double, Double)] -> (OLS, R2)
+regress :: Double             -- ^ Sample standard deviation
+        -> [(Double, Double)] -- ^ Pair of x and y values
+        -> (OLS, R2)
 regress ssd xs_and_ys = (ols, r2)
   where
     ols = fmap ceiling (ci95 sample_size ssd a)
     r2 = Ranged (fr2 (-1)) (fr2 0) (fr2 1)
 
     -- means and sample size
-    (x_mean, y_mean, sample_size) = (sum_x / n, sum_y / n, len)
+    (x_mean, y_mean, sample_size) = (sum_x / n, sum_y / n, n)
       where
         n = fromIntegral len
         (sum_x, sum_y, len) = foldl' f z xs_and_ys
@@ -1749,51 +1745,52 @@ regress ssd xs_and_ys = (ols, r2)
 {-# INLINABLE regress #-}
 
 -- | Compute sample standard deviation.
-computeSSD :: [Word64] -> Double
-computeSSD [_] = 0
-computeSSD xs = ssd
+computeSSD :: Double   -- ^ Length of the list of values
+           -> [Word64] -- ^ List of values
+           -> Double
+computeSSD !n xs = sqrt (sum [square (x-x_mean) | x <- xs'] / (n-1))
   where
-    n = fromIntegral (length xs)
     xs' = map word64ToDouble xs
-    x_mean = sum xs' / n
-    ssd = sqrt (sum [square (x - x_mean) | x <- xs'] / (n - 1))
+    !x_mean = sum xs' / n
 {-# INLINABLE computeSSD #-}
 
 -- | Compute 95% confidence interval from sample standard deviation.
-ci95 :: Int -- ^ Number of samples.
+ci95 :: Double -- ^ Number of samples.
      -> Double -- ^ Sample standard deviation.
      -> Double -- ^ The point value.
      -> Ranged Double
-ci95 n ssd x =
-  let se = ssd / (sqrt (fromIntegral n))
-      w = se * 1.96
-  in  Ranged (x - w) x (x + w)
+ci95 n ssd x = Ranged (x-w) x (x+w)
+  where
+    !w = (ssd / sqrt n) * 1.96
 {-# INLINABLE ci95 #-}
 
-computeKDE :: Mean -> [Word64] -> KDE
-computeKDE !mean_w64 xs_w64 = KDE {kdValues=values, kdPDF=pdfs}
+-- | Compute kernel density estimation.
+computeKDE :: Ranged Word64 -- ^ Range to get min and max
+           -> Double        -- ^ Sample standard deviation
+           -> Double        -- ^ Length of the list
+           -> [Word64]      -- ^ The list containing values
+           -> KDE
+computeKDE !mean_w64 !s !n xs_w64 = KDE {kdValues=values, kdPDF=density}
   where
     values = enumFromThenTo lo' (lo'+delta) hi'
       where
+        -- Dividing 120% of the range to 128 points.
         delta = (hi' - lo') / 127
         lo' = lo - r/10
         hi' = hi + r/10
         r = hi - lo
-    pdfs = [ sum [k ((x - xi) / h) | xi <- xs] / (n*h)
-           | x <- values ]
+        Ranged lo _ hi = fmap pico_to_secs mean_w64
+    density = [sum [k ((x-xi)/h) | xi<-xs] / (n*h) | x<-values]
       where
         -- Gaussian kernel
-        k x = exp (-(square x / 2)) / sqrt (2*pi)
-        -- Silverman's rule-of-thumb
-        h = 0.9 * min sd (iqr/1.34) * (n**(-0.2))
-        !iqr = q3 - q1
+        k u = exp (-(u*u/2)) / sqrt (2*pi)
+        -- Silverman's rule of thumb
+        !h = 0.9 * min s (iqr/1.34) * (n**(-0.2))
+        iqr = q3 - q1
         q3 = xs !! ceiling (n*0.75)
         q1 = xs !! truncate (n*0.25)
-        sd = sqrt (sum [square (x - mid) | x <- xs] / n)
-        xs = sort $ map to_secs xs_w64
-        !n = fromIntegral (length xs_w64)
-    Ranged lo mid hi = fmap to_secs mean_w64
-    to_secs x = word64ToDouble x / 1e12
+        xs = sort $ map pico_to_secs xs_w64
+    pico_to_secs x = word64ToDouble x / 1e12
 {-# INLINABLE computeKDE #-}
 
 
