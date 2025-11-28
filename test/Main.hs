@@ -40,6 +40,8 @@ main = Test.Tasty.defaultMain $
   , substr
   , glob
   , csv
+  , json
+  , report
   , timelimit
 #ifdef DEV
   , formatPicos
@@ -404,6 +406,26 @@ csv = with_csv_cleanup $ testGroup "csv"
         _                                  -> throwIO e
     with_csv_cleanup = withResource (pure ()) csv_cleanup . const
 
+json :: TestTree
+json = with_json_cleanup $ testGroup "json"
+  [ testCase "write json" $
+    benchNames ["--json", "mini.json"]
+  ]
+  where
+    json_cleanup _ = removeFile "mini.json"
+    with_json_cleanup = withResource (pure ()) json_cleanup . const
+
+report :: TestTree
+report = with_report_cleanup $ testGroup "report"
+  [ testCase "write report and json" $
+    benchNames ["--output", "test1.html", "--json", "test.json"]
+  , testCase "write report without json" $
+    benchNames ["-o", "test2.html"]
+  ]
+  where
+    report_cleanup _ = mapM_ removeFile ["test1.html", "test2.html"]
+    with_report_cleanup = withResource (pure ()) report_cleanup . const
+
 timelimit :: TestTree
 timelimit = testGroup "timeout"
   [ testCase "time limit, long name" $
@@ -638,4 +660,15 @@ benchQuotes args =
   , bgroup "group three"
     [ bench "'\"'" (nf fromEnum '"')
     , bench "\"'\"" (nf fromEnum '\'')]
+  ]
+
+benchNames :: [String] -> IO ()
+benchNames args =
+  defaultMainWith args
+  [ bgroup "names"
+    [ bench "containing \"double quotes\"" (nf fromEnum 'a')
+    , bench "containing 'single quotes'" (nf fromEnum 'b')
+    , bench "containing\nnew\nlines" (nf fromEnum 'c')
+    , bench "containing lt, gt, amp <>&" (nf fromEnum 'd')
+    , bench "containing \\\\ back slashes \\\\" (nf fromEnum 'e')]
   ]
