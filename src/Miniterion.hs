@@ -1178,8 +1178,10 @@ writeReport infile outfile = do
     -- bracket is removed with `init'.
     second_element = init . drop 24
 #else
-writeReport _ _ =
-  putStrLn "Writing HTML report supported, not built as a package."
+writeReport _ _ = do
+  me <- getProgName
+  putStrLn ("*** Writing HTML report is NOT supported in " <> me)
+  putStrLn (me <> " was built with non-packaged version of Miniterion")
 #endif
 
 
