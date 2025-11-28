@@ -2,7 +2,7 @@ module Main where
 
 import           Miniterion
 
-fib :: Integer -> Integer
+fib :: Int -> Int
 fib m | m < 0 = error "negative!"
       | otherwise = go m
   where
