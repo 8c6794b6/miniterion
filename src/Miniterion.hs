@@ -21,8 +21,9 @@ other packages mentioned above.
 
 This is the only module exposed from the @miniterion@ package. The
 dependency packages of @miniterion@ are kept small (at the moment
-@base@ and @deepseq@) to make the compilation time and installation
-time short, by dropping some functionalities and efficiencies.
+@base@, @deepseq@, and @directory@) to make the compilation time and
+installation time short, by dropping some functionalities and
+efficiencies.
 
 -}
 module Miniterion
@@ -77,7 +78,7 @@ module Miniterion
 import           Control.Exception      (Exception (..), SomeException (..),
                                          evaluate, finally, handle, throw,
                                          throwIO)
-import           Control.Monad          (guard, void, when)
+import           Control.Monad          (guard, unless, void, when)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Char              (toLower)
 import           Data.Foldable          (find, foldlM)
@@ -95,8 +96,9 @@ import           System.CPUTime         (cpuTimePrecision, getCPUTime)
 import           System.Environment     (getArgs, getProgName)
 import           System.Exit            (die, exitFailure)
 import           System.IO              (BufferMode (..), Handle, IOMode (..),
-                                         hFlush, hIsTerminalDevice, hPutStr,
-                                         hPutStrLn, hSetBuffering, stderr,
+                                         hClose, hFlush, hGetLine, hIsEOF,
+                                         hIsTerminalDevice, hPutStr, hPutStrLn,
+                                         hSetBuffering, openTempFile, stderr,
                                          stdout, withFile)
 import           System.Mem             (performGC, performMinorGC)
 import           System.Timeout         (timeout)
@@ -125,6 +127,14 @@ import           Data.Word              (Word32)
 
 -- deepseq
 import           Control.DeepSeq        (NFData, force, rnf)
+
+-- directory
+import           System.Directory       (getTemporaryDirectory, removeFile)
+
+#if IS_PACKAGE_BUILD
+-- Internal
+import           Paths_miniterion       (getDataFileName)
+#endif
 
 
 -- ------------------------------------------------------------------------
@@ -1021,13 +1031,35 @@ encodeCsv xs
 -- help reusing the JSON parser between Miniterion and Criterion.
 
 withJSONSettings :: MEnv -> (MEnv -> IO a) -> IO a
-withJSONSettings menv@MEnv{meConfig=cfg} act =
-  case cfgJsonPath cfg of
-    Nothing -> act menv {meJsonHandle = Nothing}
-    Just path -> withFile path WriteMode $ \hdl -> do
-      hSetBuffering hdl NoBuffering
-      hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
-      act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
+withJSONSettings menv@MEnv{meConfig=Config{..}} act =
+  -- When HTML report is specified without JSON output, writing JSON
+  -- data to a temporary file, then remove the temporary file.
+  case cfgJsonPath of
+    Just json -> do
+      r <- withFile json WriteMode $ \hdl -> withJSONHandle hdl menv act
+      mapM_ (writeReport json) cfgReportPath
+      pure r
+    Nothing | Just html <- cfgReportPath -> do
+      (r, json) <- withTemporaryFile $ \hdl -> withJSONHandle hdl menv act
+      writeReport json html >> removeFile json
+      pure r
+    _ -> act menv {meJsonHandle = Nothing}
+{-# INLINABLE withJSONSettings #-}
+
+withJSONHandle :: Handle -> MEnv -> (MEnv -> IO a) -> IO a
+withJSONHandle hdl menv act = do
+  hSetBuffering hdl NoBuffering
+  hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
+  act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
+{-# INLINABLE withJSONHandle #-}
+
+withTemporaryFile :: (Handle -> IO a) -> IO (a, FilePath)
+withTemporaryFile act = do
+  dir <- getTemporaryDirectory
+  (path, hdl) <- openTempFile dir "miniterion.json"
+  r <- act hdl `finally` hClose hdl
+  pure (r, path)
+{-# INLINABLE withTemporaryFile #-}
 
 putFailedJSON :: Int -> String -> Handle -> IO ()
 putFailedJSON !idx name hdl = do
@@ -1103,6 +1135,54 @@ escapeJSON xs = '"' : foldr f ['"'] xs
     f c        = (c:)
 {-# INLINABLE escapeJSON #-}
 
+
+-- ------------------------------------------------------------------------
+-- HTML report
+-- ------------------------------------------------------------------------
+
+-- | Write HTML report from JSON data.
+writeReport :: FilePath -- ^ Path of the input JSON file
+            -> FilePath -- ^ Path of the HTML output file
+            -> IO ()
+#if IS_PACKAGE_BUILD
+writeReport infile outfile = do
+  template_path <- getDataFileName data_template_html
+  withFile template_path ReadMode $ \ihdl ->
+    withFile outfile WriteMode $ \ohdl ->
+      let go = do
+            is_eof <- hIsEOF ihdl
+            unless is_eof $ do
+              line <- hGetLine ihdl
+              if trim line == "{{{json}}}"
+                then hPutStrLn ohdl . second_element =<< readFile infile
+                else hPutStrLn ohdl line
+              go
+      in  go
+  where
+    -- Path to the template HTML file for generating report, contains
+    -- OS specific path separator. Could be done with (</>) defined in
+    -- the 'filepath' package, but using CPP at the moment (using
+    -- backslash on Windows, or slash otherwise).
+#if defined(mingw32_HOST_OS)
+    data_template_html = "data\\template.html"
+#else
+    data_template_html = "data/template.html"
+#endif
+    -- Simple white space removal to find embedded JSON mark.
+    trim = takeWhile (/= ' ') . dropWhile (== ' ')
+
+    -- Removing pre and post characters to get the second element of
+    -- the JSON array. The number of characters before the beginning
+    -- of the second element is known in advance
+    -- (@["miniterion","w.x.y.z",@, 24 characters). The last closing
+    -- bracket is removed with `init'.
+    second_element = init . drop 24
+#else
+writeReport _ _ =
+  putStrLn "Writing HTML report supported, not built as a package."
+#endif
+
+
 -- ------------------------------------------------------------------------
 -- Configuration
 -- ------------------------------------------------------------------------
@@ -1120,6 +1200,8 @@ data Config = Config
     -- ^ Path to a file for writing results in CSV format.
   , cfgJsonPath     :: Maybe FilePath
     -- ^ Path to a file for writing JSON summary.
+  , cfgReportPath   :: Maybe FilePath
+    -- ^ Path to a file for writing HTML report.
   , cfgFailIfFaster :: Double
     -- ^ Upper bound of acceptable speed up.
   , cfgFailIfSlower :: Double
@@ -1157,6 +1239,7 @@ defaultConfig = Config
   , cfgUseColor = Auto
   , cfgBaselinePath = Nothing
   , cfgCsvPath = Nothing
+  , cfgReportPath = Nothing
   , cfgFailIfFaster = 1.0 / 0.0
   , cfgFailIfSlower = 1.0 / 0.0
   , cfgJsonPath = Nothing
@@ -1210,6 +1293,11 @@ options =
     (ReqArg (\str o -> o {cfgJsonPath = Just str})
     "FILE")
     "File to write JSON summary to"
+
+  , Option ['o'] ["output"]
+    (ReqArg (\str o -> o {cfgReportPath = Just str})
+    "FILE")
+    "File to write report to"
 
   , Option [] ["fail-if-faster"]
     (ReqArg (\str o -> case parsePositivePercents str of

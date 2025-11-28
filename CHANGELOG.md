@@ -8,16 +8,18 @@
 * Modify CSV format to follow the template used in Criterion.
 
 * Discard measurement results when the total duration is shorter than
-  threshold during batch benchmark initialization.
+  threshold.
 
 * Modify timeout detection to refer to the benchmark start and end
   time instead of the sum of the measurement durations.
 
 * Support brace expressions in glob.
 
-* Modify output with ``-v2`` flag to show divided time.
+* Modify the output of ``-v2`` flag to show divided time.
 
 * Perform minor GC after running target function to update RTSStats.
+
+* Add `--output` (`-o` for short) option to write HTML report.
 
 * Add `--json` option to write JSON summary.
 
