@@ -1639,13 +1639,8 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
 
-    init_and_go = do
-      performGC
-      start_time <- getTimePicoSecs cfgTimeMode
-      Measured m0 _ <- measure menv 1 b
-      debugStr' menv $ formatMeasurement m0
-      go start_time m0 series (Acc {acStdevs=[], acMeasurements=[m0]})
-
+    -- See 'Criterion.Measurement.{squish,series}' in the package
+    -- 'criterion-measurement'.
     series = squish (unfoldr f 2)
       where
         squish = foldr g []
@@ -1653,34 +1648,44 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
         f k = Just (truncate l, l)
           where l = k * 1.05 :: Double
 
-    -- Calculated with: threshold * 1.11 (~= 1.05^2), duration for
-    -- threshold value plus at least two more iterations in below 'go'
-    -- function. Assuming that one millisecond is longer than CPU time
-    -- precision. Comparing measured time with this value to avoid
-    -- index too large error from `(!!)' while generating JSON output.
-    threshold_and_two_more_iters = 33300000000
+    init_and_go = do
+      performGC
+      start_time <- getTimePicoSecs cfgTimeMode
+      Measured m0 _ <- measure menv 1 b
+      debugStr' menv $ formatMeasurement m0
+      go series start_time m0 $ Acc
+        { acStdevs = []
+        , acMeasurements = [m0]
+        , acCount = if threshold < measTime m0 then 1 else 0
+        }
 
-    go !start_time m1 (!n:ns) !acc = do
+    go [] _ _ _ = error "measureUntil.go: empty series"
+    go (!n:ns) !start_time m1 !acc = do
       Measured m2 end_time <- measure menv n b
       debugStr' menv $ formatMeasurement m2
-
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
-          meanN = measTime measN
-          end_time' = end_time + (measTime m2 * 2) + (30 * oneMillisecond)
-          is_timeout_soon = timeoutSoon cfgTimeout start_time end_time'
-          target_stdev = truncate (cfgRelStDev * word64ToDouble meanN)
-          is_stdev_in_target_range = stdevN < target_stdev
-          acc' = acc { acStdevs = (stdevN `quot` n) : acStdevs acc
-                     , acMeasurements = m2 : acMeasurements acc }
-
+          !is_stdev_in_target_range =
+            stdevN < truncate (cfgRelStDev * word64ToDouble (measTime measN))
+          !is_timeout_soon = case cfgTimeout of
+            Timeout micros ->
+              let next_end = end_time + measTime m2*2 + 30*oneMillisecond
+              in  micros * 1000000 < next_end - start_time
+            _ -> False
+          !count | threshold < measTime m2 = acCount acc + 1
+                 | otherwise = acCount acc
+          !acc' = acc { acStdevs = (stdevN `quot` n) : acStdevs acc
+                      , acMeasurements = m2 : acMeasurements acc
+                      , acCount = count
+                      }
       warnOnTooLongBenchmark cfgTimeout start_time end_time
-
-      if threshold_and_two_more_iters < meanN &&
-         (is_stdev_in_target_range || is_timeout_soon)
-        then pure $ summarize acc m2 est
-        else go start_time m2 ns acc'
-
-    go _ _ _ _ = error "measureUntil.go: should not happen"
+      -- Need at least 4 long enough measurements to get IQR while
+      -- computing KDE. Later the measurement data are filtered in the
+      -- 'summarize' function.
+      if 4 <= acCount acc' &&
+         (is_stdev_in_target_range ||
+          is_timeout_soon)
+        then pure $ summarize acc' est
+        else go ns start_time m2 acc'
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement {measTime=t}) =
@@ -1693,13 +1698,6 @@ measToSummary m@(Measurement {measTime=t}) =
           , smMeasured = []
           }
 {-# INLINABLE measToSummary #-}
-
-timeoutSoon :: Timeout -> Word64 -> Word64 -> Bool
-timeoutSoon tout t_start t_end_of_next_run =
-  case tout of
-    NoTimeout      -> False
-    Timeout micros -> 1000000 * micros <= (t_end_of_next_run - t_start)
-{-# INLINABLE timeoutSoon #-}
 
 warnOnTooLongBenchmark :: Timeout -> Word64 -> Word64 -> IO ()
 warnOnTooLongBenchmark tout t_start t_now =
@@ -1726,15 +1724,24 @@ warnOnTooLongBenchmark tout t_start t_now =
 data Acc = Acc
   { acStdevs       :: {-# UNPACK #-} ![Word64]
   , acMeasurements :: {-# UNPACK #-} ![Measurement]
+  , acCount        :: !Word64
   }
+
+-- XXX: Order of fields make difference in performance?
+--
+-- data Acc = Acc
+--   { acCount        :: !Word64
+--   , acMeasurements :: {-# UNPACK #-} ![Measurement]
+--   , acStdevs       :: {-# UNPACK #-} ![Word64]
+--   }
 
 -- | 30 milliseconds in picosecond.
 threshold :: Word64
 threshold = 30000000000
 {-# INLINE threshold #-}
 
-summarize :: Acc -> Measurement -> Estimate -> Summary
-summarize acc m2 (Estimate measN stdevN) = Summary
+summarize :: Acc -> Estimate -> Summary
+summarize acc (Estimate measN stdevN) = Summary
   { smEstimate = Estimate meas sd_scaled
   , smOLS = ols
   , smR2 = rsq
@@ -1745,7 +1752,7 @@ summarize acc m2 (Estimate measN stdevN) = Summary
   }
   where
     meas = scale measN
-    measured = reverse $ m2 : acMeasurements acc
+    measured = reverse (acMeasurements acc)
 
     -- The list 'means' contains normalized measurement time
     -- values. Filtering out measurements with too short total
@@ -1753,7 +1760,7 @@ summarize acc m2 (Estimate measN stdevN) = Summary
     -- unreliable. See 'Criterion.Analysis.analyseSample'.
     means = [ measTime m `quot` measIters m
             | m <- measured, threshold < measTime m ]
-    !len = fromIntegral (length means)
+    !len = fromIntegral (acCount acc)
     (mean_min, mean_max) = minMax means
     mean_r = Ranged mean_min (measTime meas) mean_max
 
