@@ -359,7 +359,7 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
   let menv0 = default_menv {mePatterns = pats}
       root_bs = bgroup "" bs
       do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
-      do_bench menv = runBenchmark menv root_bs >>= summariseResults
+      do_bench menv = runBenchmark menv root_bs
   case cfgRunMode cfg1 of
     Help     -> showHelp menv0
     _         | not (null errs)     -> errorOptions errs
@@ -367,7 +367,7 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
     Version  -> putStrLn builtWithMiniterion
     DoList   -> showNames menv0 root_bs
     DoIter n -> do_iter n
-    DoBench  -> withHandles menv0 do_bench
+    DoBench  -> withHandles menv0 do_bench >>= summariseResults
 
 withHandles :: MEnv -> (MEnv -> IO a) -> IO a
 withHandles menv0 act =
@@ -509,26 +509,30 @@ data Result
 
 summariseResults :: [Result] -> IO ()
 summariseResults rs = do
-  let (num_result, num_failed) = foldl' f z rs
+  let (!num_result, !num_failed) = foldl' f z rs
       z :: (Int, Int)
       z = (0, 0)
-      f (!done, !fl) r = case r of
+      f (!done, !fl) = \case
         Done -> (done + 1, fl)
         _    -> (done + 1, fl + 1)
-      bs = if 1 < num_result then "benchmarks" else "benchmark" :: String
+      bs | 1 < num_result = "benchmarks"
+         | otherwise = "benchmark" :: String
       pr (name, why) = putStrLn ("  - " ++ name ++ " (" ++ why ++ ")")
   when (0 < num_failed) $ do
     printf "\n%d out of %d %s failed:\n" num_failed num_result bs
     mapM_ (mapM_ pr . failedNameAndReason) (reverse rs)
     exitFailure
+{-# INLINABLE summariseResults #-}
 
 isTooFast, isTooSlow :: Result -> Bool
 
 isTooFast TooFast {} = True
 isTooFast _          = False
+{-# INLINE isTooFast #-}
 
 isTooSlow TooSlow {} = True
 isTooSlow _          = False
+{-# INLINE isTooSlow #-}
 
 failedNameAndReason :: Result -> Maybe (String, String)
 failedNameAndReason = \case
@@ -536,6 +540,7 @@ failedNameAndReason = \case
   TooSlow name  -> Just (name, "too slow")
   TooFast name  -> Just (name, "too fast")
   TimedOut name -> Just (name, "timed out")
+{-# INLINE failedNameAndReason #-}
 
 
 -- ------------------------------------------------------------------------
@@ -580,7 +585,7 @@ runBenchmarkable idx fullname b = do
   liftIO $ hFlush stdout
   mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
 
-  let (result, mb_cmp) = case mb_sum of
+  let (!result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary {smEstimate=est}) ->
           case compareVsBaseline meBaselineSet fullname est of
