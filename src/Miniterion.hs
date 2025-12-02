@@ -1065,13 +1065,25 @@ putFailedJSON :: Int -> String -> Handle -> IO ()
 putFailedJSON !idx name hdl = do
   when (idx /= 0) $ hPutStr hdl ","
   hPutStr hdl $
-    "{\"reportAnalysis\":null" ++
-    ",\"reportKDEs\":null" ++
-    ",\"reportKeys\":null" ++
-    ",\"reportMeasured\":null" ++
+    "{\"reportAnalysis\":" ++ analysis ++
+    ",\"reportKDEs\":" ++ kdes ++
+    ",\"reportKeys\":" ++ keys ++
+    ",\"reportMeasured\":" ++ measured ++
     ",\"reportName\":" ++ escapeJSON name ++
     ",\"reportNumber\":" ++ show idx ++
     "}"
+  where
+    analysis =
+      "{\"anMean\":" ++ est0 ++
+      "," ++ anOutlierVar ++
+      ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++ est0 ++
+      "},\"regRSquare\":" ++ est0 ++
+      "}],\"anStdDev\":" ++ est0 ++
+      "}"
+    est0 = "{\"estError\":{\"confIntLDX\":0,\"confIntUDX\":0},\"estPoint\":0}"
+    kdes = "[{\"kdePDF\":[],\"kdeType\":\"time\",\"kdeValues\":[]}]"
+    keys = "[]"
+    measured = "[]"
 {-# INLINABLE putFailedJSON #-}
 
 putSummaryJSON :: Int -> String -> Summary -> Handle -> IO ()
@@ -1088,6 +1100,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
   where
     analysis =
       "{\"anMean\":" ++ est (fmap picoToSecs smMean) ++
+      "," ++ anOutlierVar ++
       ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++
       est (fmap picoToSecs smOLS) ++
       "},\"regRSquare\":" ++ est smR2 ++
@@ -1117,6 +1130,14 @@ putSummaryJSON !idx name Summary{..} hdl = do
     picoToSecs pico =
       word64ToDouble pico / 1e12
 {-# INLINABLE putSummaryJSON #-}
+
+anOutlierVar :: String
+anOutlierVar =
+  "\"anOutlierVar\":" ++
+  "{\"ovDesc\":\"an unknown\"" ++
+  ",\"ovEffect\":\"Unknown\"" ++
+  ",\"ovFraction\":0}"
+{-# INLINE anOutlierVar #-}
 
 -- Simplified variant of Criterion.Report.escapeJSON for String
 -- instead of Text. Does not escape plus character (@+@) and NULL
