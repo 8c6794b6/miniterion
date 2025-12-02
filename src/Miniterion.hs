@@ -389,7 +389,7 @@ showHelp menv = do
     ]
 
 #ifndef VERSION_miniterion
-#define VERSION_miniterion "development version"
+#define VERSION_miniterion "unknown version"
 #endif
 
 builtWithMiniterion :: String
