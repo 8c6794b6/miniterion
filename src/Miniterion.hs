@@ -550,22 +550,26 @@ iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
 
 runBenchmarkWith :: (Int -> String -> Benchmarkable -> Miniterion a)
                  -> MEnv -> Benchmark -> IO [a]
-runBenchmarkWith !run menv b = fst <$> runMiniterion (go ([],0) b) menv
+runBenchmarkWith !run menv b = fst <$> runMiniterion (go [] 0 b) menv
   where
-    go (!parents,!i) bnch = case bnch of
+    -- Benchmarks are always wrapped with the root group in
+    -- defaultMainWith', selecting the benchmarks to run in Bgroup's
+    -- case.
+    go !parents !i bnch = case bnch of
       Bench name act -> do
         r <- run i (pathToName parents name) act
         pure ([r], i+1)
       Bgroup name bs -> do
-        let parents' = consNonNull name parents
-            to_run = filter (any (isMatched menv) . benchNames parents') bs
-            f (!rs, !j) bnch' = do
-              (rs', j') <- go (parents', j) bnch'
-              pure (rs' ++ rs, j')
-        foldlM f ([],i) to_run
+        let !parents' = consNonNull name parents
+            f (!rs, !j) !bnch'
+              | any (isMatched menv) (benchNames parents' bnch') = do
+                  (!rs', j') <- go parents' j bnch'
+                  pure (rs' ++ rs, j')
+              | otherwise = pure (rs, j)
+        foldlM f ([],i) bs
       Environment !alloc !clean f -> liftIO $ do
         e <- alloc >>= \e -> evaluate (rnf e) >> pure e
-        runMiniterion (go (parents, i) (f e)) menv `finally` clean e
+        runMiniterion (go parents i (f e)) menv `finally` clean e
 
 runBenchmarkable :: Int -> String -> Benchmarkable -> Miniterion Result
 runBenchmarkable idx fullname b = do
