@@ -697,6 +697,8 @@ formatResult res (Just summary) mb_cmp =
   white "std dev              " <> showPicos5 (2 * irMid smStdev) <> "   " <>
   show_minmax (2 * irLo smStdev) (2 * irHi smStdev) <>
   --
+  formatOutlierVariance smOutlierVar <>
+  --
   formatGC m <> "\n\n"
   where
     Summary {smEstimate=Estimate m _, ..} = summary
@@ -724,6 +726,40 @@ formatSlowDown result ratio = case percents `compare` 0 of
     percents = truncate ((ratio - 1) * 100)
     in_yellow test = (if test result then yellow else white) . fromString
 
+formatOutlierVariance :: OutlierVariance -> Doc
+formatOutlierVariance (OutlierVariance !oe _ frac) = case oe of
+  Moderate -> show_oe
+  Severe   -> show_oe
+  _        -> ""
+  where
+    show_oe =
+      white "\nvariance introduced by outliers: " <>
+      stringToDoc (printf "%2d%% " (round (frac * 100) :: Int)) <>
+      white ("(" <> stringToDoc (map toLower (show oe)) <> "ly inflated)")
+
+formatGC :: Measurement -> Doc
+formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
+  Doc $ \ !e ->
+  if meHasGCStats e then
+    let sb !b = fromString $! showBytes b
+    in  docToString e $ "\n" <>
+        white "        alloc  copied    peak" <> "\n" <>
+        white "gc     " <> sb a <> "  " <> sb c <> "  " <> sb p
+  else
+    ""
+
+formatMeasurement :: Measurement -> Doc
+formatMeasurement (Measurement n t a c m) =
+  fromString (show n) <>
+  (if n == 1 then " iteration gives " else " iteragions give ") <>
+  showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
+  Doc (\ !menv ->
+         if meHasGCStats menv then
+           printf " alloc: %d copied: %d max: %d" a c m
+         else
+           "") <>
+  "\n"
+
 -- | Show picoseconds, fitting number in 5 characters.
 showPicos5 :: Word64 -> Doc
 showPicos5 i
@@ -748,17 +784,6 @@ showPicos5 i
     f = fromString
     print_mu fmt = Doc (printf fmt (t / 1e6) . mu)
 
-formatGC :: Measurement -> Doc
-formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
-  Doc $ \ !e ->
-  if meHasGCStats e then
-    let sb !b = fromString $! showBytes b
-    in  docToString e $ "\n" <>
-        white "        alloc  copied    peak" <> "\n" <>
-        white "gc     " <> sb a <> "  " <> sb c <> "  " <> sb p
-  else
-    ""
-
 -- | Show bytes with unit.
 showBytes :: Word64 -> String
 showBytes i
@@ -777,18 +802,6 @@ showBytes i
   | otherwise                = printf "%3.0f EB" (t / 1152921504606846976)
   where
     t = word64ToDouble i
-
-formatMeasurement :: Measurement -> Doc
-formatMeasurement (Measurement n t a c m) =
-  fromString (show n) <>
-  (if n == 1 then " iteration gives " else " iteragions give ") <>
-  showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
-  Doc (\ !menv ->
-         if meHasGCStats menv then
-           printf " alloc: %d copied: %d max: %d" a c m
-         else
-           "") <>
-  "\n"
 
 
 -- ------------------------------------------------------------------------
@@ -1089,6 +1102,11 @@ putFailedJSON !idx name hdl = do
       "},\"regRSquare\":" ++ est0 ++
       "}],\"anStdDev\":" ++ est0 ++
       "}"
+    anOutlierVar =
+      "\"anOutlierVar\":" ++
+      "{\"ovDesc\":\"no\"" ++
+      ",\"ovEffect\":\"Unaffected\"" ++
+      ",\"ovFraction\":0}"
     est0 = "{\"estError\":{\"confIntLDX\":0,\"confIntUDX\":0},\"estPoint\":0}"
     kdes = "[{\"kdePDF\":[],\"kdeType\":\"time\",\"kdeValues\":[]}]"
     keys = "[]"
@@ -1109,7 +1127,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
   where
     analysis =
       "{\"anMean\":" ++ est (fmap picoToSecs smMean) ++
-      "," ++ anOutlierVar ++
+      ",\"anOutlierVar\":" ++ variance smOutlierVar ++
       ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++
       est (fmap picoToSecs smOLS) ++
       "},\"regRSquare\":" ++ est smR2 ++
@@ -1120,6 +1138,11 @@ putSummaryJSON !idx name Summary{..} hdl = do
           "{\"estError\":{\"confIntLDX\":" ++ show (mid - lo) ++
           ",\"confIntUDX\":" ++ show (hi - mid) ++
           "},\"estPoint\":" ++ show mid ++
+          "}"
+        variance OutlierVariance{..} =
+          "{\"ovDesc\":\"" ++ ovDesc ++ "\"" ++
+          ",\"ovEffect\":\"" ++ show ovEffect ++ "\"" ++
+          ",\"ovFraction\":" ++ show ovFraction ++
           "}"
     kdes =
       "[{\"kdePDF\":" ++ show (kdPDF smKDEs) ++
@@ -1136,17 +1159,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
           (if a == 0 then "null" else show a) ++ "," ++
           (if m == 0 then "null" else show (m `quot` 1000000)) ++ "," ++
           (if c == 0 then "null" else show c) ++ "]"
-    picoToSecs pico =
-      word64ToDouble pico / 1e12
 {-# INLINABLE putSummaryJSON #-}
-
-anOutlierVar :: String
-anOutlierVar =
-  "\"anOutlierVar\":" ++
-  "{\"ovDesc\":\"an unknown\"" ++
-  ",\"ovEffect\":\"Unknown\"" ++
-  ",\"ovFraction\":0}"
-{-# INLINE anOutlierVar #-}
 
 -- Simplified variant of Criterion.Report.escapeJSON for String
 -- instead of Text. Does not escape plus character (@+@) and NULL
@@ -1476,6 +1489,10 @@ getTimePicoSecs = \case
   CpuTime  -> fromInteger <$> getCPUTime
   WallTime -> round . (1e12 *) <$> getMonotonicTime
 
+picoToSecs :: Word64 -> Double
+picoToSecs pico = word64ToDouble pico / 1e12
+{-# INLINE picoToSecs #-}
+
 
 -- ------------------------------------------------------------------------
 -- Getting GC info
@@ -1563,14 +1580,28 @@ data KDE = KDE
   , kdPDF    :: {-# UNPACK #-} ![Double]
   }
 
+data OutlierEffect
+  = Unaffected
+  | Slight
+  | Moderate
+  | Severe
+  deriving (Show)
+
+data OutlierVariance = OutlierVariance
+  { ovEffect   :: OutlierEffect
+  , ovDesc     :: String
+  , ovFraction :: !Double
+  }
+
 data Summary = Summary
-  { smEstimate :: !Estimate
-  , smOLS      :: !OLS
-  , smR2       :: !R2
-  , smStdev    :: !Stdev
-  , smMean     :: !Mean
-  , smKDEs     :: KDE
-  , smMeasured :: [Measurement]
+  { smEstimate   :: !Estimate
+  , smOLS        :: !OLS
+  , smR2         :: !R2
+  , smStdev      :: !Stdev
+  , smMean       :: !Mean
+  , smKDEs       :: KDE
+  , smMeasured   :: [Measurement]
+  , smOutlierVar :: !OutlierVariance
   }
 
 square :: Num a => a -> a
@@ -1726,6 +1757,7 @@ measToSummary m@(Measurement {measTime=t}) =
           , smMean =  toRanged t
           , smKDEs = KDE [] []
           , smMeasured = []
+          , smOutlierVar = OutlierVariance Unaffected "no" 0
           }
 {-# INLINABLE measToSummary #-}
 
@@ -1777,24 +1809,26 @@ summarize acc (Estimate measN stdevN) = Summary
   , smR2 = rsq
   , smStdev = Ranged sd_min sd_all_w64 sd_max
   , smMean = mean_r
-  , smKDEs = computeKDE mean_r sd_all len means
+  , smKDEs = kde
   , smMeasured = measured
+  , smOutlierVar = ov
   }
   where
     meas = scale measN
     measured = reverse (acMeasurements acc)
 
-    -- The list 'means' contains normalized measurement time
-    -- values. Filtering out measurements with too short total
-    -- duration, since those data are considered imprecise and
-    -- unreliable. See 'Criterion.Analysis.analyseSample'.
-    means = [ measTime m `quot` measIters m
+    -- Filtering out measurements with too short total duration, since
+    -- those data are considered imprecise and unreliable. See
+    -- 'Criterion.Analysis.analyseSample'.
+    times = [ measTime m `quot` measIters m
             | m <- measured, threshold < measTime m ]
     !len = fromIntegral (acCount acc)
-    (mean_min, mean_max) = minMax means
-    mean_r = Ranged mean_min (measTime meas) mean_max
 
-    !sd_all = computeSSD len means
+    !mean_all = sum [word64ToDouble t | t <- times] / len
+    (mean_min, mean_max) = minMax times
+    mean_r = Ranged mean_min (ceiling mean_all) mean_max
+
+    !sd_all = computeSSD len mean_all times
     !sd_all_w64 = ceiling sd_all
     !sd_scaled = stdevN `quot` measIters measN
     (sd_min, sd_max) = minMax (sd_all_w64 : sd_scaled : acStdevs acc)
@@ -1802,6 +1836,8 @@ summarize acc (Estimate measN stdevN) = Summary
     (ols, rsq) = regress sd_all xys
     xys = [ (word64ToDouble (measIters m), word64ToDouble (measTime m))
           | m <- measured ]
+
+    (kde, ov) = kdeAndOutlierVariance mean_r sd_all len times
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1873,12 +1909,11 @@ regress ssd xs_and_ys = (ols, r2)
 
 -- | Compute sample standard deviation.
 computeSSD :: Double   -- ^ Length of the list of values
+           -> Double   -- ^ Mean
            -> [Word64] -- ^ List of values
            -> Double
-computeSSD !n xs = sqrt (sum [square (x-x_mean) | x <- xs'] / (n-1))
-  where
-    xs' = map word64ToDouble xs
-    !x_mean = sum xs' / n
+computeSSD !n !mean xs =
+  sqrt (sum [square (word64ToDouble x - mean) | x <- xs] / (n-1))
 {-# INLINABLE computeSSD #-}
 
 -- | Compute 95% confidence interval from sample standard deviation.
@@ -1891,34 +1926,51 @@ ci95 n ssd x = Ranged (x-w) x (x+w)
     !w = (ssd / sqrt n) * 1.96
 {-# INLINABLE ci95 #-}
 
--- | Compute kernel density estimation.
-computeKDE :: Ranged Word64 -- ^ Range to get min and max
-           -> Double        -- ^ Sample standard deviation
-           -> Double        -- ^ Length of the list
-           -> [Word64]      -- ^ The list containing values
-           -> KDE
-computeKDE !mean_w64 !s !n xs_w64 = KDE {kdValues=values, kdPDF=density}
+-- | Compute kernel density estimation and outlier variance effect.
+kdeAndOutlierVariance :: Ranged Word64 -- ^ Range to get min and max
+                      -> Double        -- ^ Sample standard deviation
+                      -> Double        -- ^ Length of the list
+                      -> [Word64]      -- ^ The list containing values
+                      -> (KDE, OutlierVariance)
+kdeAndOutlierVariance !mean_w64 !s !n xs_w64 = (kde, ov)
   where
+    kde = KDE {kdValues=values, kdPDF=density}
+
+    -- Dividing 120% of the range to 128 points.
     values = enumFromThenTo lo' (lo'+delta) hi'
       where
-        -- Dividing 120% of the range to 128 points.
         delta = (hi' - lo') / 127
         lo' = lo - r/10
         hi' = hi + r/10
         r = hi - lo
-        Ranged lo _ hi = fmap pico_to_secs mean_w64
+        Ranged lo _ hi = fmap picoToSecs mean_w64
+
+    -- Using simple Gaussian kernel function and Silverman's rule of
+    -- thumb for bandwidth.
     density = [sum [k ((x-xi)/h) | xi<-xs] / (n*h) | x<-values]
       where
-        -- Gaussian kernel
         k u = exp (-(u*u/2)) / sqrt (2*pi)
-        -- Silverman's rule of thumb
-        !h = 0.9 * min s (iqr/1.34) * (n**(-0.2))
+        !h = 0.9 * min s_in_seconds s'_in_seconds * (n ** (-0.2))
+
+    -- Comparing sample standard deviation to pseudo standard
+    -- deviation calculated from IQR. See
+    -- 'Criterion.Analysis.outlierVariance'.
+    ov = OutlierVariance effect desc frac
+      where
+        (effect, desc) | frac < 0.01 = (Unaffected, "no")
+                       | frac < 0.1  = (Slight,     "a slight")
+                       | frac < 0.5  = (Moderate,   "a moderate")
+                       | otherwise   = (Severe,     "a severe")
+        frac = 1 - min 1 (s'_in_seconds / s_in_seconds)
+
+    s_in_seconds = s / 1e12
+    s'_in_seconds = iqr / 1.349
+      where
         iqr = q3 - q1
-        q3 = xs !! ceiling (n*0.75)
-        q1 = xs !! truncate (n*0.25)
-        xs = sort $ map pico_to_secs xs_w64
-    pico_to_secs x = word64ToDouble x / 1e12
-{-# INLINABLE computeKDE #-}
+        q3 = xs !! ceiling (n * 0.75)
+        q1 = xs !! truncate (n * 0.25)
+    xs = sort $ map picoToSecs xs_w64
+{-# INLINABLE kdeAndOutlierVariance #-}
 
 
 -- ------------------------------------------------------------------------
