@@ -349,18 +349,103 @@ defaultMainWith cfg bs = do
 #else
   act
 #endif
+{-# INLINABLE defaultMainWith #-}
+
+-- | Default configuration used for running benchmarks.
+defaultConfig :: Config
+defaultConfig = Config
+  { cfgUseColor = Auto
+  , cfgMatch = Prefix
+  , cfgTimeMode = CpuTime
+  , cfgTimeout = NoTimeout
+  , cfgBaselinePath = Nothing
+  , cfgCsvPath = Nothing
+  , cfgJsonPath = Nothing
+  , cfgReportPath = Nothing
+  , cfgFailIfFaster = 1.0 / 0.0
+  , cfgFailIfSlower = 1.0 / 0.0
+  , cfgRelStDev = 0.05
+  , cfgVerbosity = 1
+  }
+
+-- | Data type to hold configuration information.
+data Config = Config
+  { cfgUseColor     :: !UseColor
+    -- ^ When to use colored outputs.
+  , cfgMatch        :: !MatchMode
+    -- ^ Which mode to use for benchmark name pattern match.
+  , cfgTimeMode     :: !TimeMode
+    -- ^ Time mode for measuring benchmarks.
+  , cfgTimeout      :: !Timeout
+    -- ^ Timeout duration in seconds.
+  , cfgBaselinePath :: Maybe FilePath
+    -- ^ Path to a file containing baseline data, usually a CSV file
+    -- made with @--csv@ option in advance.
+  , cfgCsvPath      :: Maybe FilePath
+    -- ^ Path to a file for writing results in CSV format.
+  , cfgJsonPath     :: Maybe FilePath
+    -- ^ Path to a file for writing JSON summary.
+  , cfgReportPath   :: Maybe FilePath
+    -- ^ Path to a file for writing HTML report.
+  , cfgFailIfFaster :: Double
+    -- ^ Upper bound of acceptable speed up.
+  , cfgFailIfSlower :: Double
+    -- ^ Upper bound of acceptable slow down.
+  , cfgRelStDev     :: !Double
+    -- ^ Relative standard deviation for terminating benchmarks.
+  , cfgVerbosity    :: !Int
+    -- ^ Verbosity level.
+  }
+
+-- | When to use colored output.
+data UseColor
+  = Always -- ^ Always use color.
+  | Auto   -- ^ Use color if the output is a terminal device.
+  | Never  -- ^ Don't use color.
+
+-- | Data type to express how to match benchmark names.
+data MatchMode
+  = Pattern  -- ^ Substring match
+  | Prefix   -- ^ Prefix match
+  | IPattern -- ^ Case insensitive prefix match
+  | Glob     -- ^ Glob pattern match
+
+-- | Data type to select the function to get times.
+data TimeMode
+  = CpuTime  -- ^ Measure CPU time.
+  | WallTime -- ^ Measure wall-clock time.
+
+-- | Express duration for timeout.
+data Timeout
+  = Timeout !Word64
+  -- ^ Duration in microseconds (e.g., 2000000 for 2 seconds).
+  | NoTimeout
+  -- ^ Run without timeout.
+
+
+-- ------------------------------------------------------------------------
+-- Main
+-- ------------------------------------------------------------------------
+
+-- | Mode to execute the main function.
+data RunMode
+  = Help           -- ^ Show help message.
+  | Version        -- ^ Show version info.
+  | DoList         -- ^ Show benchmark names.
+  | DoIter !Word64 -- ^ Run benchmarks for given repeat count, don't analyse.
+  | DoBench        -- ^ Run benchmarks.
 
 defaultMainWith' :: Config -> [Benchmark] -> IO ()
 defaultMainWith' cfg0 bs = handleMiniterionException $ do
   args <- getArgs
-  let (opts, pats, invalids, errs) = getOpt' Permute options args
-      cfg1 = foldl' (flip id) cfg0 opts
+  let (!opts, !pats, invalids, errs) = getOpt' Permute options args
+      O !cfg1 !run_mode = foldl' (flip id) (O cfg0 DoBench) opts
   default_menv <- getDefaultMEnv cfg1
   let menv0 = default_menv {mePatterns = pats}
       root_bs = bgroup "" bs
       do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
-      do_bench menv = runBenchmark menv root_bs
-  case cfgRunMode cfg1 of
+      do_bench !menv = runBenchmark menv root_bs
+  case run_mode of
     Help     -> showHelp menv0
     _         | not (null errs)     -> errorOptions errs
               | not (null invalids) -> invalidOptions invalids
@@ -452,6 +537,7 @@ defaultMEnv = MEnv
   , meSupportsUnicode = False
   , meHasGCStats = False
   }
+{-# INLINABLE defaultMEnv #-}
 
 -- | Get the default t'MEnv' from given t'Config'.
 getDefaultMEnv :: Config -> IO MEnv
@@ -468,6 +554,7 @@ getDefaultMEnv !cfg = do
     , meSupportsUnicode = supports_unicode
     , meHasGCStats = has_gc_stats
     }
+{-# INLINABLE getDefaultMEnv #-}
 
 -- | A monad to run 'IO' actions with t'MEnv', basically same as
 -- @ReaderT MEnv IO@.
@@ -807,13 +894,6 @@ showBytes i
 -- ------------------------------------------------------------------------
 -- Matching benchmark names
 -- ------------------------------------------------------------------------
-
--- | Data type to express how to match benchmark names.
-data MatchMode
-  = Pattern -- ^ Substring match
-  | Prefix  -- ^ Prefix match
-  | IPattern -- ^ Case insensitive prefix match
-  | Glob -- ^ Glob pattern match
 
 isMatched :: MEnv -> String -> Bool
 isMatched MEnv{..} fullname = null mePatterns || has_match
@@ -1229,81 +1309,20 @@ writeReport _ _ = do
 
 
 -- ------------------------------------------------------------------------
--- Configuration
+-- Command line options
 -- ------------------------------------------------------------------------
 
--- | Data type to hold configuration information.
-data Config = Config
-  { cfgRunMode      :: !RunMode
-    -- ^ Mode to run the main program.
-  , cfgUseColor     :: !UseColor
-    -- ^ When to use colored outputs.
-  , cfgBaselinePath :: Maybe FilePath
-    -- ^ Path to a file containing baseline data, usually a CSV file
-    -- made with @--csv@ option in advance.
-  , cfgCsvPath      :: Maybe FilePath
-    -- ^ Path to a file for writing results in CSV format.
-  , cfgJsonPath     :: Maybe FilePath
-    -- ^ Path to a file for writing JSON summary.
-  , cfgReportPath   :: Maybe FilePath
-    -- ^ Path to a file for writing HTML report.
-  , cfgFailIfFaster :: Double
-    -- ^ Upper bound of acceptable speed up.
-  , cfgFailIfSlower :: Double
-    -- ^ Upper bound of acceptable slow down.
-  , cfgMatch        :: !MatchMode
-    -- ^ Which mode to use for benchmark name pattern match.
-  , cfgRelStDev     :: !Double
-    -- ^ Relative standard deviation for measuring benchmarks.
-  , cfgTimeMode     :: !TimeMode
-    -- ^ Time mode for measuring benchmarks.
-  , cfgTimeout      :: !Timeout
-    -- ^ Timeout duration in seconds.
-  , cfgVerbosity    :: !Int
-    -- ^ Verbosity level.
-  }
+data Opts = O Config RunMode
 
--- | Mode to execute the main function.
-data RunMode
-  = Help          -- ^ Show help message.
-  | Version       -- ^ Show version info.
-  | DoList        -- ^ Show benchmark names.
-  | DoIter Word64 -- ^ Run benchmarks, don't analyse.
-  | DoBench       -- ^ Run benchmarks.
-
--- | When to use colored output.
-data UseColor
-  = Always -- ^ Always use color.
-  | Auto   -- ^ Use color if the output is a terminal device.
-  | Never  -- ^ Don't use color.
-
--- | Default configuration used for running benchmarks.
-defaultConfig :: Config
-defaultConfig = Config
-  { cfgRunMode = DoBench
-  , cfgUseColor = Auto
-  , cfgBaselinePath = Nothing
-  , cfgCsvPath = Nothing
-  , cfgReportPath = Nothing
-  , cfgFailIfFaster = 1.0 / 0.0
-  , cfgFailIfSlower = 1.0 / 0.0
-  , cfgJsonPath = Nothing
-  , cfgMatch = Prefix
-  , cfgRelStDev = 0.05
-  , cfgTimeMode = CpuTime
-  , cfgTimeout = NoTimeout
-  , cfgVerbosity = 1
-  }
-
-options :: [OptDescr (Config -> Config)]
+options :: [OptDescr (Opts -> Opts)]
 options =
   [ Option ['h'] ["help"]
-    (NoArg (\o -> o {cfgRunMode = Help}))
+    (NoArg (\(O c _) -> O c Help))
     "Show this help text"
 
   , Option ['L'] ["time-limit"]
-    (ReqArg (\str o -> case readMaybe str :: Maybe Double of
-                Just n -> o {cfgTimeout = Timeout (floor (1e6 * n))}
+    (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Double of
+                Just n -> O (c {cfgTimeout = Timeout (floor (1e6 * n))}) m
                 _      -> throw (InvalidArgument "time-limit" str))
       "SECS")
 
@@ -1316,8 +1335,8 @@ options =
                    ,("auto", Auto)
                    ,("never", Never)]
            match str = isPrefixOf str . fst
-       in  ReqArg (\str o -> case find (match str) whens of
-                      Just (_, uc) -> o {cfgUseColor = uc}
+       in  ReqArg (\str (O c m) -> case find (match str) whens of
+                      Just (_, uc) -> O (c {cfgUseColor = uc}) m
                       _            -> throw (InvalidArgument "color" str))
            "WHEN")
       (unlines
@@ -1325,28 +1344,28 @@ options =
        ,"(default: auto)"])
 
   , Option [] ["baseline"]
-    (ReqArg (\str o -> o {cfgBaselinePath = Just str})
+    (ReqArg (\str (O c m) -> O (c {cfgBaselinePath = Just str}) m)
     "FILE")
     "File to read CSV summary from as baseline"
 
   , Option [] ["csv"]
-    (ReqArg (\str o -> o {cfgCsvPath = Just str})
+    (ReqArg (\str (O c m) -> O (c {cfgCsvPath = Just str}) m)
      "FILE")
     "File to write CSV summary to"
 
   , Option [] ["json"]
-    (ReqArg (\str o -> o {cfgJsonPath = Just str})
+    (ReqArg (\str (O c m) -> O (c {cfgJsonPath = Just str}) m)
     "FILE")
     "File to write JSON summary to"
 
   , Option ['o'] ["output"]
-    (ReqArg (\str o -> o {cfgReportPath = Just str})
+    (ReqArg (\str (O c m) -> O (c {cfgReportPath = Just str}) m)
     "FILE")
     "File to write report to"
 
   , Option [] ["fail-if-faster"]
-    (ReqArg (\str o -> case parsePositivePercents str of
-                Just x -> o {cfgFailIfFaster = x}
+    (ReqArg (\str (O c m) -> case parsePositivePercents str of
+                Just x -> O (c {cfgFailIfFaster = x}) m
                 _      -> throw (InvalidArgument "fail-if-faster" str))
       "NUM")
     (unlines
@@ -1355,8 +1374,8 @@ options =
      ,"--baseline), it will be reported as failed"])
 
   , Option [] ["fail-if-slower"]
-    (ReqArg (\str o -> case parsePositivePercents str of
-                Just x -> o {cfgFailIfSlower = x}
+    (ReqArg (\str (O c m) -> case parsePositivePercents str of
+                Just x -> O (c {cfgFailIfSlower = x}) m
                 _      -> throw (InvalidArgument "fail-if-slower" str))
       "NUM")
     (unlines
@@ -1365,8 +1384,8 @@ options =
      ,"--baseline), it will be reported as failed"])
 
   , Option ['s'] ["stdev"]
-    (ReqArg (\str o -> case parseNonNegativeParcents str of
-                Just x -> o {cfgRelStDev = x}
+    (ReqArg (\str (O c m) -> case parseNonNegativeParcents str of
+                Just x -> O (c {cfgRelStDev = x}) m
                 _      -> throw (InvalidArgument "stdev" str))
      "NUM")
     (unlines
@@ -1374,9 +1393,9 @@ options =
      ,"in percents (default: 5)"])
 
   , Option [] ["time-mode"]
-    (ReqArg (\str o -> case str of
-                "cpu"  -> o {cfgTimeMode = CpuTime}
-                "wall" -> o {cfgTimeMode = WallTime}
+    (ReqArg (\str (O c m) -> case str of
+                "cpu"  -> O (c {cfgTimeMode = CpuTime}) m
+                "wall" -> O (c {cfgTimeMode = WallTime}) m
                 _      -> throw (InvalidArgument "time-mode" str))
     "cpu|wall")
     (unlines
@@ -1384,15 +1403,15 @@ options =
      ,"time (\"wall\") (default: cpu)"])
 
   , Option ['v'] ["verbosity"]
-    (ReqArg (\str o -> case readMaybe str :: Maybe Int of
-                Just n | 0 <= n && n <= 2 -> o {cfgVerbosity = n}
+    (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Int of
+                Just n | 0 <= n && n <= 2 -> O (c {cfgVerbosity = n}) m
                 _ -> throw (InvalidArgument "verbosity" str))
       "INT")
      "Verbosity level (default: 1)"
 
   , Option ['n'] ["iters"]
-    (ReqArg (\str o -> case readMaybe str :: Maybe Word64 of
-                Just n -> o {cfgRunMode = DoIter n}
+    (ReqArg (\str (O c _) -> case readMaybe str :: Maybe Word64 of
+                Just n -> O c (DoIter n)
                 _      -> throw (InvalidArgument "iters" str))
     "INT")
     "Run benchmarks, don't analyse"
@@ -1403,8 +1422,8 @@ options =
                  ,("prefix", Prefix)
                  ,("ipattern", IPattern)]
          match str = isPrefixOf str . fst
-     in  ReqArg (\str o -> case find (match str) modes of
-                    Just (_, mode) -> o {cfgMatch = mode}
+     in  ReqArg (\str (O c m) -> case find (match str) modes of
+                    Just (_, mode) -> O (c {cfgMatch = mode}) m
                     _              -> throw (InvalidArgument "match" str))
          "MODE")
     (unlines
@@ -1412,11 +1431,11 @@ options =
      ,"\"pattern\" (substring), or \"ipattern\")"])
 
   , Option ['l'] ["list"]
-    (NoArg (\o -> o {cfgRunMode = DoList}))
+    (NoArg (\ (O c _) -> O c DoList))
     "List benchmarks"
 
   , Option [] ["version"]
-    (NoArg (\o -> o {cfgRunMode = Version}))
+    (NoArg (\ (O c _ ) -> O c Version))
     "Show version info"
   ]
 
@@ -1479,11 +1498,6 @@ handleMiniterionException =
 -- Getting current time
 -- ------------------------------------------------------------------------
 
--- | Data type to select the function to get times.
-data TimeMode
-  = CpuTime -- ^ Measure CPU time.
-  | WallTime -- ^ Measure wall-clock time.
-
 getTimePicoSecs :: TimeMode -> IO Word64
 getTimePicoSecs = \case
   CpuTime  -> fromInteger <$> getCPUTime
@@ -1529,13 +1543,6 @@ getGCStatsEnabled = pure False
 -- ------------------------------------------------------------------------
 -- Measuring
 -- ------------------------------------------------------------------------
-
--- | Express duration for timeout.
-data Timeout
-  = Timeout !Word64
-  -- ^ Duration in microseconds (e.g., 2000000 for 2 seconds).
-  | NoTimeout
-  -- ^ Run without timeout.
 
 data Measurement = Measurement
   { measIters  :: !Word64 -- ^ number of iterations
