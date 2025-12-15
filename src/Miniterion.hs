@@ -57,14 +57,21 @@ module Miniterion
     -- * For interactive use
   , benchmark
 
+    -- * Miniterion specific
+    -- $miniterion_specific
+  , defaultMainWith
+  , defaultConfig
+  , Config(..)
+  , UseColor(..)
+  , MatchMode(..)
+  , TimeMode(..)
+  , Timeout(..)
+
 #ifdef DEV
     -- * For development, exposed for testing
   , showPicos5
   , showBytes
   , mu
-
-  , Config
-  , defaultConfig
 
   , MEnv
   , getDefaultMEnv
@@ -331,11 +338,16 @@ whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
 benchmark :: Benchmarkable -> IO ()
 benchmark = void . runBenchmark defaultMEnv . bench "..."
 
+-- $miniterion_specific
+--
+-- Functions and data types for Miniterion specific configuration.
+--
+-- The data type t'Config' has the same name as
+-- @Criterion.Types.<https://hackage.haskell.org/package/criterion/docs/Criterion-Types.html#t:Config Config>@,
+-- but the implementation is different.
 
--- ------------------------------------------------------------------------
--- Main
--- ------------------------------------------------------------------------
-
+-- | An entry point that can be used as a @main@ function, with
+-- configurable defaults.
 defaultMainWith :: Config -> [Benchmark] -> IO ()
 defaultMainWith cfg bs = do
   let act = defaultMainWith' cfg bs

@@ -89,14 +89,14 @@ benchmarkable = testGroup "benchmarkable"
 
   , testGroup "perRunEnv"
        ([ testCase "wc with perRunEnv" $
-          defaultMainWith
+          defaultMainWith'
           ["--stdev", "90"]
           [ bench "wc" $
             perRunEnv (readFile miniterionDotCabal) (pure . wc) ]
         | os == "linux"
         ] <>
         [ testCase "perRunEnv with time limit" $
-          defaultMainWith
+          defaultMainWith'
           ["-L4", "-s1e-32"]
           [ bench "fib" $
             perRunEnv
@@ -105,23 +105,23 @@ benchmarkable = testGroup "benchmarkable"
 
   , testGroup "iters"
     [ testCase "iter batch bench" $
-      defaultMainWith ["-n", "3"]
+      defaultMainWith' ["-n", "3"]
       [ bgroup "fib" [ bench "4" (nf fib 4)
                      , bench "8" (nf fib 8) ]]
     , testCase "iter perBatch bench" $
-      defaultMainWith ["-n", "3", "-L", "1"]
+      defaultMainWith' ["-n", "3", "-L", "1"]
       [ bgroup "fib" [ bench "4" (perBatchEnvWithCleanup
                                  pure
                                  (\n e -> (n + e) `seq` pure ())
                                  (\_ -> fib 4 `seq` pure ()))]]
     , testCase "iter perRun bench" $
-      defaultMainWith ["--iters", "3"]
+      defaultMainWith' ["--iters", "3"]
       [ bgroup "fib" [ withRunEnv "16" 16 ifib
                      , withRunEnv "32" 32 ifib]
       ]
     , testCase "iter timeout" $
       shouldExitFailure $
-      defaultMainWith ["--iters", "3000", "-L", "1"]
+      defaultMainWith' ["--iters", "3000", "-L", "1"]
       [ bgroup "fib" [ bench "36" (nf fib 36) ]
       ]
     ]
@@ -235,7 +235,7 @@ skipping = testGroup "skipping"
 
 benchNestingEnvStrictGrouped :: [String] -> IO ()
 benchNestingEnvStrictGrouped args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "a"
     [ bgroup "1" [s, p]
     , bgroup "2" [s, p] ]
@@ -258,14 +258,14 @@ substr = testGroup "substr"
 
   , testCase "invalid match mode" $
     shouldExitFailure $
-    defaultMainWith
+    defaultMainWith'
     ["-m", "no_such_mode"]
     [ bench "foo" (nf fib 8) ]
   ]
   where
     substr_test args str =
       shouldExitFailure $
-      defaultMainWith args
+      defaultMainWith' args
       [ bench "don't match me" (nfIO exit)
       , bench str (nfIO (exitFailure :: IO ()))
       , bench "don't match me either" (nfIO exit)
@@ -341,7 +341,7 @@ glob = testGroup "glob"
   where
     glob_test pat str =
       shouldExitFailure $
-      defaultMainWith
+      defaultMainWith'
       ["--match=glob", pat]
       [ bench "skip me" (nfIO (exitSuccess :: IO ()))
       , bench str (nfIO (exitFailure :: IO ())) ]
@@ -520,10 +520,10 @@ formatBytes = testGroup "format bytes"
 -- ------------------------------------------------------------------------
 
 defaultMain' :: [Benchmark] -> IO ()
-defaultMain' = defaultMainWith []
+defaultMain' = defaultMainWith' []
 
-defaultMainWith :: [String] -> [Benchmark] -> IO ()
-defaultMainWith args = quietly . withArgs args' . Miniterion.defaultMain
+defaultMainWith' :: [String] -> [Benchmark] -> IO ()
+defaultMainWith' args = quietly . withArgs args' . Miniterion.defaultMain
   where
 #if linux_HOST_OS
     -- Running the tests in CI for other os than Linux is slow, using
@@ -562,20 +562,20 @@ shouldExitFailure act = void (act >> throwIO ExitSuccess) `catch` \e ->
     _                     -> throwIO e
 
 emptyMain :: [String] -> IO ()
-emptyMain args = defaultMainWith args []
+emptyMain args = defaultMainWith' args []
 
 miniterionDotCabal :: FilePath
 miniterionDotCabal = "miniterion.cabal"
 
 benchFib4 :: [String] -> IO ()
 benchFib4 args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "fib"
     [ bench "4" (nf fib 4) ]]
 
 benchWithEnvAndPat :: [String] -> IO ()
 benchWithEnvAndPat args =
-  defaultMainWith args
+  defaultMainWith' args
   [ env (pure (3, 4)) $ \ (a, b) ->
       bgroup "fib"
       [ bench "a" (nf fib a)
@@ -583,7 +583,7 @@ benchWithEnvAndPat args =
 
 benchWithEnvAndIrrPat :: [String] -> IO ()
 benchWithEnvAndIrrPat args =
-  defaultMainWith args
+  defaultMainWith' args
   [ env (pure (3, 4)) $ \ ~(a, b) ->
       bgroup "fib"
       [ bench "a" (nf fib a)
@@ -595,7 +595,7 @@ p = bench "pred" (nf (pred :: Int -> Int) 1)
 
 benchNesting :: [String] -> IO ()
 benchNesting args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "a" [s, p]
   , bgroup "b"
     [ bgroup "1" [s, p]
@@ -608,7 +608,7 @@ benchNesting args =
 
 benchNestingEnvStrict :: [String] -> IO ()
 benchNestingEnvStrict args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "a"
     [ bgroup "1" [s, p]
     , bgroup "2" [s, p] ]
@@ -619,7 +619,7 @@ benchNestingEnvStrict args =
 
 benchForMatch :: [String] -> IO ()
 benchForMatch args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "a"
     [ bgroup "a1" [s, p]
     , bgroup "a2" [s, p] ]
@@ -628,7 +628,7 @@ benchForMatch args =
 
 benchSlowfib :: [String] -> IO ()
 benchSlowfib args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "fib"
     [ bench "4" (nf fib 4)
     , bench "8" (nf fib 8)
@@ -636,13 +636,13 @@ benchSlowfib args =
 
 benchFib32 :: [String] -> IO ()
 benchFib32 args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "fib"
     [ bench "32" (nf fib 32) ]]
 
 benchFastfib :: [String] -> IO ()
 benchFastfib args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "fib"
     [ bench "4" (nf fib 4)
     , bench "8" (nf fastfib 8)
@@ -650,7 +650,7 @@ benchFastfib args =
 
 benchQuotes :: [String] -> IO ()
 benchQuotes args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "group \"one\""
     [ bgroup "a" [s, p]
     , bgroup  "b" [s, p] ]
@@ -664,7 +664,7 @@ benchQuotes args =
 
 benchNames :: [String] -> IO ()
 benchNames args =
-  defaultMainWith args
+  defaultMainWith' args
   [ bgroup "names"
     [ bench "containing \"double quotes\"" (nf fromEnum 'a')
     , bench "containing 'single quotes'" (nf fromEnum 'b')
