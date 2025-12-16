@@ -4,4 +4,6 @@ cabal.project.local
 .stack-work
 stack.yaml.lock
 
+.miniterion-tmp.json
+
 *~

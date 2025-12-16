@@ -59,8 +59,7 @@ library
     import:           basic
     exposed-modules:  Miniterion
     other-modules:    Paths_miniterion
-    build-depends:    deepseq   >= 1.4 && < 1.6
-                    , directory >= 1.3 && < 1.5
+    build-depends:    deepseq >= 1.4 && < 1.6
     hs-source-dirs:   src
     cpp-options:      -DIS_PACKAGE_BUILD
     if flag(dev)

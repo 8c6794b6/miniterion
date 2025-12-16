@@ -21,9 +21,8 @@ other packages mentioned above.
 
 This is the only module exposed from the @miniterion@ package. The
 dependency packages of @miniterion@ are kept small (at the moment
-@base@, @deepseq@, and @directory@) to make the compilation time and
-installation time short, by dropping some functionalities and
-efficiencies.
+@base@ and @deepseq@) to make the compilation time and installation
+time short, by dropping some functionalities and efficiencies.
 
 -}
 module Miniterion
@@ -103,10 +102,10 @@ import           System.CPUTime         (cpuTimePrecision, getCPUTime)
 import           System.Environment     (getArgs, getProgName)
 import           System.Exit            (die, exitFailure)
 import           System.IO              (BufferMode (..), Handle, IOMode (..),
-                                         hClose, hFlush, hGetLine, hIsEOF,
+                                         hFlush, hGetLine, hIsEOF,
                                          hIsTerminalDevice, hPutStr, hPutStrLn,
-                                         hSetBuffering, openTempFile, stderr,
-                                         stdout, withFile)
+                                         hSetBuffering, stderr, stdout,
+                                         withFile)
 import           System.Mem             (performGC, performMinorGC)
 import           System.Timeout         (timeout)
 import           Text.Printf            (printf)
@@ -134,9 +133,6 @@ import           Data.Word              (Word32)
 
 -- deepseq
 import           Control.DeepSeq        (NFData, force, rnf)
-
--- directory
-import           System.Directory       (getTemporaryDirectory, removeFile)
 
 #if IS_PACKAGE_BUILD
 -- Internal
@@ -1139,41 +1135,41 @@ encodeCsv xs
 -- ------------------------------------------------------------------------
 
 -- The JSON report made by Miniterion differs from the one made by
--- Criterion. Some of the keys are missing (e.g., outlier). Some of
--- the keys have the same names but the meaning differs (e.g.,
--- confIntLDX, confIntUDX). Hope that the use of the same names will
--- help reusing the JSON parser between Miniterion and Criterion.
+-- Criterion. Some of the keys have the same names but the meaning
+-- differs (e.g., confIntLDX, confIntUDX), some of the values are
+-- missing (e.g., 'y' in regCoeffs, Measurement fields). Hope that the
+-- use of the same names will help reusing the JSON parser between
+-- Miniterion and Criterion.
 
 withJSONSettings :: MEnv -> (MEnv -> IO a) -> IO a
 withJSONSettings menv@MEnv{meConfig=Config{..}} act =
   -- When HTML report is specified without JSON output, writing JSON
-  -- data to a temporary file, then remove the temporary file.
+  -- data to a temporary file.
   case cfgJsonPath of
     Just json -> do
-      r <- withFile json WriteMode $ \hdl -> withJSONHandle hdl menv act
+      r <- withJSONFile json menv act
       mapM_ (writeReport json) cfgReportPath
       pure r
     Nothing | Just html <- cfgReportPath -> do
-      (r, json) <- withTemporaryFile $ \hdl -> withJSONHandle hdl menv act
-      writeReport json html >> removeFile json
+      r <- withJSONFile tmpJSONFile menv act
+      writeReport tmpJSONFile html
       pure r
     _ -> act menv {meJsonHandle = Nothing}
 {-# INLINABLE withJSONSettings #-}
 
-withJSONHandle :: Handle -> MEnv -> (MEnv -> IO a) -> IO a
-withJSONHandle hdl menv act = do
-  hSetBuffering hdl NoBuffering
-  hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
-  act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
-{-# INLINABLE withJSONHandle #-}
+-- | Temporary file to write JSON data for generating report when the
+-- JSON path was not specified.
+tmpJSONFile :: FilePath
+tmpJSONFile = ".miniterion-tmp.json"
+{-# INLINE tmpJSONFile #-}
 
-withTemporaryFile :: (Handle -> IO a) -> IO (a, FilePath)
-withTemporaryFile act = do
-  dir <- getTemporaryDirectory
-  (path, hdl) <- openTempFile dir "miniterion.json"
-  r <- act hdl `finally` hClose hdl
-  pure (r, path)
-{-# INLINABLE withTemporaryFile #-}
+withJSONFile :: FilePath -> MEnv -> (MEnv -> IO a) -> IO a
+withJSONFile !file !menv !act =
+  withFile file WriteMode $ \hdl -> do
+    hSetBuffering hdl NoBuffering
+    hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
+    act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
+{-# INLINABLE withJSONFile #-}
 
 putFailedJSON :: Int -> String -> Handle -> IO ()
 putFailedJSON !idx name hdl = do

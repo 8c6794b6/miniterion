@@ -31,11 +31,10 @@ other packages mentioned above.
 
 The miniterion package is designed to have a small number of package
 dependencies. At the time of writing, the direct dependency packages
-are only three: `base`, `deepseq`, and `directory`. The miniterion
-package does not have rich features, but compared to other
-benchmarking packages, the package and benchmark executable should
-compile faster, and the resulting benchmark executable should be
-smaller.
+are only two: `base` and `deepseq`. The miniterion package does not
+have rich features, but compared to other benchmarking packages, the
+package and benchmark executable should compile faster, and the
+resulting benchmark executable should be smaller.
 
 
 ## Example
