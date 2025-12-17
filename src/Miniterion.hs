@@ -794,6 +794,8 @@ formatResult res (Just summary) mb_cmp =
   white "std dev              " <> showPicos5 (2 * irMid smStdev) <> "   " <>
   show_minmax (2 * irLo smStdev) (2 * irHi smStdev) <>
   --
+  formatOutliers smOutliers <>
+  --
   formatOutlierVariance smOutlierVar <>
   --
   formatGC m <> "\n\n"
@@ -833,6 +835,32 @@ formatOutlierVariance (OutlierVariance !oe _ frac) = case oe of
       white "\nvariance introduced by outliers: " <>
       stringToDoc (printf "%2d%% " (round (frac * 100) :: Int)) <>
       white ("(" <> stringToDoc (map toLower (show oe)) <> "ly inflated)")
+
+formatOutliers :: Outliers -> Doc
+formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
+  if 1 < cfgVerbosity (meConfig menv) && 0 < os then
+    docToString menv msg
+  else
+    ""
+  where
+    os = ls + lm + hm + hs
+    frac n = (100::Double) * fromIntegral n / fromIntegral seen
+    msg =
+      "\n" <> white "found " <> stringToDoc (show os) <>
+      white " outliers among " <> stringToDoc (show seen) <>
+      white " samples (" <> stringToDoc (printf "%.1g%%" (frac os)) <>
+      white ")" <>
+      f ls "low severe" <>
+      f lm "low mild" <>
+      f hm "high mild" <>
+      f hs "high severe"
+    f n what =
+      if 0 < n then
+        "\n  " <> stringToDoc (show n) <> white " (" <>
+        stringToDoc (printf "%.1g%%" (frac n)) <> white ") " <>
+        white what
+      else
+        ""
 
 formatGC :: Measurement -> Doc
 formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
@@ -1183,6 +1211,7 @@ putFailedJSON !idx name hdl = do
     ",\"reportMeasured\":" ++ measured ++
     ",\"reportName\":" ++ escapeJSON name ++
     ",\"reportNumber\":" ++ show idx ++
+    ",\"reportOutliers\":" ++ outliers ++
     "}"
   where
     analysis =
@@ -1190,6 +1219,7 @@ putFailedJSON !idx name hdl = do
       "," ++ anOutlierVar ++
       ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++ est0 ++
       "},\"regRSquare\":" ++ est0 ++
+      ",\"regResponder\":\"time\"" ++
       "}],\"anStdDev\":" ++ est0 ++
       "}"
     anOutlierVar =
@@ -1197,10 +1227,16 @@ putFailedJSON !idx name hdl = do
       "{\"ovDesc\":\"no\"" ++
       ",\"ovEffect\":\"Unaffected\"" ++
       ",\"ovFraction\":0}"
-    est0 = "{\"estError\":{\"confIntLDX\":0,\"confIntUDX\":0},\"estPoint\":0}"
+    est0 =
+      "{\"estError\":" ++
+      "{\"confIntCL\":0.05,\"confIntLDX\":0,\"confIntUDX\":0}" ++
+      ",\"estPoint\":0}"
     kdes = "[{\"kdePDF\":[],\"kdeType\":\"time\",\"kdeValues\":[]}]"
     keys = "[]"
     measured = "[]"
+    outliers =
+      "{\"highMild\":0,\"highSevere\":0" ++
+      ",\"lowMild\":0,\"lowSevere\":0,\"samplesSeen\":0}"
 {-# INLINABLE putFailedJSON #-}
 
 putSummaryJSON :: Int -> String -> Summary -> Handle -> IO ()
@@ -1213,42 +1249,78 @@ putSummaryJSON !idx name Summary{..} hdl = do
     ",\"reportMeasured\":" ++ measured ++
     ",\"reportName\":" ++ escapeJSON name ++
     ",\"reportNumber\":" ++ show idx ++
+    ",\"reportOutliers\":" ++ outliers ++
     "}"
   where
     analysis =
       "{\"anMean\":" ++ est (fmap picoToSecs smMean) ++
-      ",\"anOutlierVar\":" ++ variance smOutlierVar ++
-      ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++
-      est (fmap picoToSecs smOLS) ++
-      "},\"regRSquare\":" ++ est smR2 ++
-      "}],\"anStdDev\":" ++ est (fmap picoToSecs smStdev) ++
+      ",\"anOutlierVar\":" ++ variance ++
+      ",\"anRegress\":[" ++ reg ++ "]" ++
+      ",\"anStdDev\":" ++ est (fmap picoToSecs smStdev) ++
       "}"
       where
         est (Ranged lo mid hi) =
-          "{\"estError\":{\"confIntLDX\":" ++ show (mid - lo) ++
+          "{\"estError\":{\"confIntCL\":0.05" ++
+          ",\"confIntLDX\":" ++ show (mid - lo) ++
           ",\"confIntUDX\":" ++ show (hi - mid) ++
           "},\"estPoint\":" ++ show mid ++
           "}"
-        variance OutlierVariance{..} =
+        variance =
           "{\"ovDesc\":\"" ++ ovDesc ++ "\"" ++
           ",\"ovEffect\":\"" ++ show ovEffect ++ "\"" ++
           ",\"ovFraction\":" ++ show ovFraction ++
           "}"
+          where
+            OutlierVariance{..} = smOutlierVar
+        reg =
+          "{\"regCoeffs\":" ++ coeffs ++
+          ",\"regRSquare\":" ++ est smR2 ++
+          ",\"regResponder\":\"time\"" ++
+          "}"
+          where
+            coeffs =
+              "{\"iters\":" ++ est (fmap picoToSecs smOLS) ++ "}"
     kdes =
       "[{\"kdePDF\":" ++ show (kdPDF smKDEs) ++
       ",\"kdeType\":\"time\"" ++
       ",\"kdeValues\":" ++ show (kdValues smKDEs) ++
       "}]"
     keys =
-      "[\"time\",\"iters\",\"allocated\",\"peakMbAllocated\",\"bytesCopied\"]"
+      -- See 'Criterion.Measurement.Types.measureAccessors_'
+      "[\"time\",\"cpuTime\",\"cycles\",\"iters\"" ++
+      ",\"allocated\",\"peakMbAllocated\",\"numGcs\",\"bytesCopied\"" ++
+      ",\"mutatorWallSeconds\",\"mutatorCpuSeconds\"" ++
+      ",\"gcWallSeconds\",\"gcCpuSeconds\"]"
     measured =
       "[" ++ intercalate "," (map meas_to_arr smMeasured) ++ "]"
       where
         meas_to_arr (Measurement n t a c m) =
-          "[" ++ show (picoToSecs t) ++ "," ++ show n ++ "," ++
+          -- time
+          "[" ++ show (picoToSecs t) ++ "," ++
+          -- cpuTime and cycles
+          "0,0," ++
+          -- iters
+          show n ++ "," ++
+          -- allocated
           (if a == 0 then "null" else show a) ++ "," ++
+          -- peakMbAllocated
           (if m == 0 then "null" else show (m `quot` 1000000)) ++ "," ++
-          (if c == 0 then "null" else show c) ++ "]"
+          -- numGCs
+          "null," ++
+          -- bytesCopied
+          (if c == 0 then "null" else show c) ++
+          -- mutatorWallSeconds, mutatorCpuSeconds, gcWallSeconds, and
+          -- gcCpuSeconds
+          ",null,null,null,null]"
+    outliers =
+      "{\"highMild\":" ++ show otHighMild ++
+      ",\"highSevere\":" ++ show otHighSevere ++
+      ",\"lowMild\":" ++ show otLowMild ++
+      ",\"lowSevere\":" ++ show otLowSevere ++
+      ",\"samplesSeen\":" ++ show otSamplesSeen ++
+      "}"
+      where
+        Outliers {..} = smOutliers
 {-# INLINABLE putSummaryJSON #-}
 
 -- Simplified variant of Criterion.Report.escapeJSON for String
@@ -1610,15 +1682,24 @@ data OutlierVariance = OutlierVariance
   , ovFraction :: !Double
   }
 
+data Outliers = Outliers
+  { otSamplesSeen :: !Word64
+  , otLowSevere   :: !Word64
+  , otLowMild     :: !Word64
+  , otHighMild    :: !Word64
+  , otHighSevere  :: !Word64
+  }
+
 data Summary = Summary
   { smEstimate   :: !Estimate
   , smOLS        :: !OLS
   , smR2         :: !R2
   , smStdev      :: !Stdev
   , smMean       :: !Mean
+  , smOutlierVar :: !OutlierVariance
+  , smOutliers   :: Outliers
   , smKDEs       :: KDE
   , smMeasured   :: [Measurement]
-  , smOutlierVar :: !OutlierVariance
   }
 
 square :: Num a => a -> a
@@ -1775,6 +1856,7 @@ measToSummary m@(Measurement {measTime=t}) =
           , smKDEs = KDE [] []
           , smMeasured = []
           , smOutlierVar = OutlierVariance Unaffected "no" 0
+          , smOutliers = Outliers 0 0 0 0 0
           }
 {-# INLINABLE measToSummary #-}
 
@@ -1829,6 +1911,7 @@ summarize acc (Estimate measN stdevN) = Summary
   , smKDEs = kde
   , smMeasured = measured
   , smOutlierVar = ov
+  , smOutliers = outliers
   }
   where
     meas = scale measN
@@ -1854,7 +1937,7 @@ summarize acc (Estimate measN stdevN) = Summary
     xys = [ (word64ToDouble (measIters m), word64ToDouble (measTime m))
           | m <- measured ]
 
-    (kde, ov) = kdeAndOutlierVariance mean_r sd_all len times
+    (kde, outliers, ov) = kdeAndOutliers mean_r sd_all len times
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1907,8 +1990,8 @@ regress ssd xs_and_ys = (ols, r2)
     (x_mean, y_mean, sample_size) = (sum_x / n, sum_y / n, n)
       where
         n = fromIntegral len
-        (sum_x, sum_y, len) = foldl' f z xs_and_ys
-        f (!sx, !sy, !sl) (x,y) = (sx + x, sy + y, sl + 1)
+        (sum_x, sum_y, len) = foldr f z xs_and_ys
+        f (x, y) (!sx, !sy, !sl) = (sx + x, sy + y, sl + 1)
         z = (0, 0, 0 :: Int)
 
     -- ols
@@ -1943,13 +2026,13 @@ ci95 n ssd x = Ranged (x-w) x (x+w)
     !w = (ssd / sqrt n) * 1.96
 {-# INLINABLE ci95 #-}
 
--- | Compute kernel density estimation and outlier variance effect.
-kdeAndOutlierVariance :: Ranged Word64 -- ^ Range to get min and max
-                      -> Double        -- ^ Sample standard deviation
-                      -> Double        -- ^ Length of the list
-                      -> [Word64]      -- ^ The list containing values
-                      -> (KDE, OutlierVariance)
-kdeAndOutlierVariance !mean_w64 !s !n xs_w64 = (kde, ov)
+-- | Compute kernel density estimation and outliers.
+kdeAndOutliers :: Ranged Word64 -- ^ Range to get min and max
+               -> Double        -- ^ Sample standard deviation
+               -> Double        -- ^ Length of the list
+               -> [Word64]      -- ^ The list containing values
+               -> (KDE, Outliers, OutlierVariance)
+kdeAndOutliers !mean_w64 !s !n xs_w64 = (kde, outliers, ov)
   where
     kde = KDE {kdValues=values, kdPDF=density}
 
@@ -1969,6 +2052,22 @@ kdeAndOutlierVariance !mean_w64 !s !n xs_w64 = (kde, ov)
         k u = exp (-(u*u/2)) / sqrt (2*pi)
         !h = 0.9 * min s_in_seconds s'_in_seconds * (n ** (-0.2))
 
+    -- See 'Criterion.Analysis.classifyOutliers'.
+    outliers = foldr f z xs
+      where
+        f t
+          | t  <= ls  = addOutliers (Outliers 1 1 0 0 0)
+          | t  <= lm  = addOutliers (Outliers 1 0 1 0 0)
+          | hs <= t   = addOutliers (Outliers 1 0 0 0 1)
+          | hm <= t   = addOutliers (Outliers 1 0 0 1 0)
+          | otherwise = addOutliers (Outliers 1 0 0 0 0)
+          where
+            !ls = q1 - (iqr * 3)
+            !lm = q1 - (iqr * 1.5)
+            !hm = q3 + (iqr * 1.5)
+            !hs = q3 + (iqr * 3)
+        z = Outliers 0 0 0 0 0
+
     -- Comparing sample standard deviation to pseudo standard
     -- deviation calculated from IQR. See
     -- 'Criterion.Analysis.outlierVariance'.
@@ -1982,12 +2081,16 @@ kdeAndOutlierVariance !mean_w64 !s !n xs_w64 = (kde, ov)
 
     s_in_seconds = s / 1e12
     s'_in_seconds = iqr / 1.349
-      where
-        iqr = q3 - q1
-        q3 = xs !! ceiling (n * 0.75)
-        q1 = xs !! truncate (n * 0.25)
-    xs = sort $ map picoToSecs xs_w64
-{-# INLINABLE kdeAndOutlierVariance #-}
+    iqr = q3 - q1
+    q3 = xs !! ceiling (n * 0.75)
+    q1 = xs !! truncate (n * 0.25)
+    xs = sort [picoToSecs x | x <- xs_w64]
+{-# INLINABLE kdeAndOutliers #-}
+
+addOutliers :: Outliers -> Outliers -> Outliers
+addOutliers (Outliers n1 ls1 lm1 hm1 hs1) (Outliers n2 ls2 lm2 hm2 hs2) =
+  Outliers (n1+n2) (ls1+ls2) (lm1+lm2) (hm1+hm2) (hs1+hs2)
+{-# INLINE addOutliers #-}
 
 
 -- ------------------------------------------------------------------------
