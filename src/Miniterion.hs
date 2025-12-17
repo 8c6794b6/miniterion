@@ -755,13 +755,15 @@ noop = const (pure ())
 -- Printing with verbosity
 -- ------------------------------------------------------------------------
 
-infoStr, debugStr :: Doc -> Miniterion ()
+infoStr, _warnStr, debugStr :: Doc -> Miniterion ()
 infoStr = Miniterion . flip infoStr'
+_warnStr = Miniterion . flip _warnStr'
 debugStr = Miniterion . flip debugStr'
 
-infoStr', debugStr' :: MEnv -> Doc -> IO ()
+infoStr', _warnStr', debugStr' :: MEnv -> Doc -> IO ()
 infoStr' = putDocWith 1
-debugStr' = putDocWith 2
+_warnStr' = putDocWith 2
+debugStr' = putDocWith 3
 
 putDocWith :: Int -> MEnv -> Doc -> IO ()
 putDocWith n menv doc =
@@ -1412,7 +1414,7 @@ options =
 
   , Option ['v'] ["verbosity"]
     (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Int of
-                Just n | 0 <= n && n <= 2 -> O (c {cfgVerbosity = n}) m
+                Just n | 0 <= n && n <= 3 -> O (c {cfgVerbosity = n}) m
                 _ -> throw (InvalidArgument "verbosity" str))
       "INT")
      "Verbosity level (default: 1)"
