@@ -1895,10 +1895,10 @@ summarize acc (Estimate measN stdevN) = Summary
   , smR2 = rsq
   , smStdev = Ranged sd_min sd_all_w64 sd_max
   , smMean = mean_r
-  , smKDEs = kde
-  , smMeasured = measured
   , smOutlierVar = ov
   , smOutliers = outliers
+  , smKDEs = kde
+  , smMeasured = measured
   }
   where
     meas = scale measN
