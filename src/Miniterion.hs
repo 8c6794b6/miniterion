@@ -746,14 +746,14 @@ noop = const (pure ())
 -- Printing with verbosity
 -- ------------------------------------------------------------------------
 
-infoStr, _warnStr, debugStr :: Doc -> Miniterion ()
+infoStr, _verboseStr, debugStr :: Doc -> Miniterion ()
 infoStr = Miniterion . flip infoStr'
-_warnStr = Miniterion . flip _warnStr'
+_verboseStr = Miniterion . flip verboseStr'
 debugStr = Miniterion . flip debugStr'
 
-infoStr', _warnStr', debugStr' :: MEnv -> Doc -> IO ()
+infoStr', verboseStr', debugStr' :: MEnv -> Doc -> IO ()
 infoStr' = putDocWith 1
-_warnStr' = putDocWith 2
+verboseStr' = putDocWith 2
 debugStr' = putDocWith 3
 
 putDocWith :: Int -> MEnv -> Doc -> IO ()
