@@ -1327,7 +1327,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
 -- instead of Text. Does not escape plus character (@+@) and NULL
 -- (@\0@).
 escapeJSON :: String -> String
-escapeJSON xs = '"' : foldr f ['"'] xs
+escapeJSON = ('"' :) . foldr f ['"']
   where
     f '\n'     = ("\\n" ++)
     f '\\'     = ("\\\\" ++)
