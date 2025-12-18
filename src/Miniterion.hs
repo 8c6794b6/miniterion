@@ -1913,7 +1913,7 @@ summarize acc (Estimate measN stdevN) = Summary
 
     !mean_all = sum [word64ToDouble t | t <- times] / len
     (mean_min, mean_max) = minMax times
-    mean_r = Ranged mean_min (ceiling mean_all) mean_max
+    !mean_r = Ranged mean_min (ceiling mean_all) mean_max
 
     !sd_all = computeSSD len mean_all times
     !sd_all_w64 = ceiling sd_all
@@ -1924,7 +1924,7 @@ summarize acc (Estimate measN stdevN) = Summary
     xys = [ (word64ToDouble (measIters m), word64ToDouble (measTime m))
           | m <- measured ]
 
-    (kde, outliers, ov) = kdeAndOutliers mean_r sd_all len times
+    (kde, outliers, !ov) = kdeAndOutliers mean_r sd_all len times
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1937,9 +1937,9 @@ scale (Measurement n t p a c m) = Measurement n t' p' a' c' m
 {-# INLINE scale #-}
 
 minMax :: [Word64] -> (Word64, Word64)
-minMax = foldr f z
+minMax = foldl' f z
   where
-    f x (amin, amax) = (min amin x, max amax x)
+    f (amin, amax) x = (min amin x, max amax x)
     z = (maxBound, minBound)
 {-# INLINABLE minMax #-}
 
@@ -1978,8 +1978,8 @@ regress ssd xs_and_ys = (ols, r2)
     (x_mean, y_mean, sample_size) = (sum_x / n, sum_y / n, n)
       where
         n = fromIntegral len
-        (sum_x, sum_y, len) = foldr f z xs_and_ys
-        f (x, y) (!sx, !sy, !sl) = (sx + x, sy + y, sl + 1)
+        (sum_x, sum_y, len) = foldl' f z xs_and_ys
+        f (!sx, !sy, !sl) (x,y) = (sx + x, sy + y, sl + 1)
         z = (0, 0, 0 :: Int)
 
     -- ols
