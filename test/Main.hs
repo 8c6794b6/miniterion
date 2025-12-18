@@ -179,12 +179,6 @@ options = testGroup "options"
   , testCase "missing stdev arg" $
     shouldExitFailure $ emptyMain ["--stdev"]
 
-  , testCase "cpu clock for time-mode option" $
-    benchFib4 ["--time-mode", "cpu"]
-
-  , testCase "wall clock for time-mode option" $
-    benchFib4 ["--time-mode", "wall"]
-
   , testCase "invalid time-mode option" $
     shouldExitFailure $ benchFib4 ["--time-mode", "blah"]
 

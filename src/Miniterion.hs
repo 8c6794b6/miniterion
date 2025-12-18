@@ -63,7 +63,6 @@ module Miniterion
   , Config(..)
   , UseColor(..)
   , MatchMode(..)
-  , TimeMode(..)
   , Timeout(..)
 
 #ifdef DEV
@@ -93,7 +92,7 @@ import           Data.List              (intercalate, isPrefixOf, nub, sort,
                                          stripPrefix, tails, unfoldr)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
-import           GHC.Clock              (getMonotonicTime)
+import           GHC.Clock              (getMonotonicTimeNSec)
 import           GHC.Stats              (RTSStats (..), getRTSStats,
                                          getRTSStatsEnabled)
 import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
@@ -364,7 +363,6 @@ defaultConfig :: Config
 defaultConfig = Config
   { cfgUseColor = Auto
   , cfgMatch = Prefix
-  , cfgTimeMode = CpuTime
   , cfgTimeout = NoTimeout
   , cfgBaselinePath = Nothing
   , cfgCsvPath = Nothing
@@ -382,27 +380,25 @@ data Config = Config
     -- ^ When to use colored outputs.
   , cfgMatch        :: !MatchMode
     -- ^ Which mode to use for benchmark name pattern match.
-  , cfgTimeMode     :: !TimeMode
-    -- ^ Time mode for measuring benchmarks.
   , cfgTimeout      :: !Timeout
     -- ^ Timeout duration in seconds.
-  , cfgBaselinePath :: Maybe FilePath
+  , cfgRelStDev     :: !Double
+    -- ^ Relative standard deviation for terminating benchmarks.
+  , cfgVerbosity    :: !Int
+    -- ^ Verbosity level.
+  , cfgBaselinePath :: !(Maybe FilePath)
     -- ^ Path to a file containing baseline data, usually a CSV file
     -- made with @--csv@ option in advance.
-  , cfgCsvPath      :: Maybe FilePath
+  , cfgCsvPath      :: !(Maybe FilePath)
     -- ^ Path to a file for writing results in CSV format.
-  , cfgJsonPath     :: Maybe FilePath
+  , cfgJsonPath     :: !(Maybe FilePath)
     -- ^ Path to a file for writing JSON summary.
-  , cfgReportPath   :: Maybe FilePath
+  , cfgReportPath   :: !(Maybe FilePath)
     -- ^ Path to a file for writing HTML report.
   , cfgFailIfFaster :: Double
     -- ^ Upper bound of acceptable speed up.
   , cfgFailIfSlower :: Double
     -- ^ Upper bound of acceptable slow down.
-  , cfgRelStDev     :: !Double
-    -- ^ Relative standard deviation for terminating benchmarks.
-  , cfgVerbosity    :: !Int
-    -- ^ Verbosity level.
   }
 
 -- | When to use colored output.
@@ -417,11 +413,6 @@ data MatchMode
   | Prefix   -- ^ Prefix match
   | IPattern -- ^ Case insensitive prefix match
   | Glob     -- ^ Glob pattern match
-
--- | Data type to select the function to get times.
-data TimeMode
-  = CpuTime  -- ^ Measure CPU time.
-  | WallTime -- ^ Measure wall-clock time.
 
 -- | Express duration for timeout.
 data Timeout
@@ -874,7 +865,7 @@ formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
     ""
 
 formatMeasurement :: Measurement -> Doc
-formatMeasurement (Measurement n t a c m) =
+formatMeasurement (Measurement n t _ a c m) =
   fromString (show n) <>
   (if n == 1 then " iteration gives " else " iteragions give ") <>
   showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
@@ -1294,13 +1285,11 @@ putSummaryJSON !idx name Summary{..} hdl = do
     measured =
       "[" ++ intercalate "," (map meas_to_arr smMeasured) ++ "]"
       where
-        meas_to_arr (Measurement n t a c m) =
+        meas_to_arr (Measurement n t p a c m) =
           -- time
           "[" ++ show (picoToSecs t) ++ "," ++
-          -- cpuTime and cycles
-          "0,0," ++
-          -- iters
-          show n ++ "," ++
+          -- cputTime, cycles, iters
+          show (picoToSecs p) ++ ",0," ++ show n ++ "," ++
           -- allocated
           (if a == 0 then "null" else show a) ++ "," ++
           -- peakMbAllocated
@@ -1474,16 +1463,6 @@ options =
      ["Target relative standard deviation of measurement"
      ,"in percents (default: 5)"])
 
-  , Option [] ["time-mode"]
-    (ReqArg (\str (O c m) -> case str of
-                "cpu"  -> O (c {cfgTimeMode = CpuTime}) m
-                "wall" -> O (c {cfgTimeMode = WallTime}) m
-                _      -> throw (InvalidArgument "time-mode" str))
-    "cpu|wall")
-    (unlines
-     ["Whether to measure CPU (\"cpu\") time or wall-clock"
-     ,"time (\"wall\") (default: cpu)"])
-
   , Option ['v'] ["verbosity"]
     (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Int of
                 Just n | 0 <= n && n <= 3 -> O (c {cfgVerbosity = n}) m
@@ -1580,10 +1559,13 @@ handleMiniterionException =
 -- Getting current time
 -- ------------------------------------------------------------------------
 
-getTimePicoSecs :: TimeMode -> IO Word64
-getTimePicoSecs = \case
-  CpuTime  -> fromInteger <$> getCPUTime
-  WallTime -> round . (1e12 *) <$> getMonotonicTime
+getPicoSecs :: IO Word64
+getPicoSecs = fmap (* 1000) getMonotonicTimeNSec
+{-# INLINE getPicoSecs #-}
+
+getCpuPicoSecs :: IO Word64
+getCpuPicoSecs = fmap fromIntegral getCPUTime
+{-# INLINE getCpuPicoSecs #-}
 
 picoToSecs :: Word64 -> Double
 picoToSecs pico = word64ToDouble pico / 1e12
@@ -1627,11 +1609,12 @@ getGCStatsEnabled = pure False
 -- ------------------------------------------------------------------------
 
 data Measurement = Measurement
-  { measIters  :: !Word64 -- ^ number of iterations
-  , measTime   :: !Word64 -- ^ time in picoseconds
-  , measAllocs :: !Word64 -- ^ allocations in bytes
-  , measCopied :: !Word64 -- ^ copied bytes
-  , measMaxMem :: !Word64 -- ^ max memory in use
+  { measIters   :: !Word64 -- ^ number of iterations
+  , measTime    :: !Word64 -- ^ time in picoseconds
+  , measCpuTime :: !Word64 -- ^ cpu time in picoseconds
+  , measAllocs  :: !Word64 -- ^ allocations in bytes
+  , measCopied  :: !Word64 -- ^ copied bytes
+  , measMaxMem  :: !Word64 -- ^ max memory in use
   }
 
 -- | Measurement paired with end time.
@@ -1648,6 +1631,7 @@ instance Semigroup Measured where
       max_of = on max
       m3 = Measurement { measIters = measIters m2
                        , measTime = add measTime
+                       , measCpuTime = add measCpuTime
                        , measAllocs = add measAllocs
                        , measCopied = add measCopied
                        , measMaxMem = max_of measMaxMem
@@ -1710,12 +1694,14 @@ predict
   :: Measurement -- ^ time for the previous run
   -> Measurement -- ^ time for the current run
   -> Estimate
-predict (Measurement n1 t1 a1 c1 m1) (Measurement n2 t2 a2 c2 m2) = Estimate
-  { estMean  = Measurement n1 t (fit a1 a2) (fit c1 c2) (max m1 m2)
+predict (Measurement n1 t1 p1 a1 c1 m1) (Measurement n2 t2 p2 a2 c2 m2) =
+  Estimate
+  { estMean  = Measurement n1 t p (fit a1 a2) (fit c1 c2) (max m1 m2)
   , estStdev = truncate (sqrt d)
   }
   where
     !t = fit t1 t2
+    !p = fit p1 p2
     fit x1 x2 = n1 * (x1 `quot` n3 + x2 `quot` n3)
       where
         n3 = n1 + n2
@@ -1769,21 +1755,22 @@ runLoop Benchmarkable{..} n f
 {-# INLINE runLoop #-}
 
 measure :: MEnv -> Word64 -> Benchmarkable -> IO Measured
-measure MEnv{meConfig=cfg, meHasGCStats=gc} num b =
+measure MEnv{meHasGCStats=gc} num b =
   runLoop b num $ \act -> do
-    let getTimePicoSecs' = getTimePicoSecs (cfgTimeMode cfg)
-
     performMinorGC
     (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied gc
-    start_time <- getTimePicoSecs'
+    start_time <- getPicoSecs
+    start_cpu_time <- getCpuPicoSecs
     act
-    end_time <- getTimePicoSecs'
+    end_time <- getPicoSecs
+    end_cpu_time <- getCpuPicoSecs
     performMinorGC
     (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied gc
 
     let meas = Measurement
           { measIters = num
           , measTime = end_time - start_time
+          , measCpuTime = end_cpu_time - start_cpu_time
           , measAllocs = end_allocs - start_allocs
           , measCopied = end_copied - start_copied
           , measMaxMem = max end_max_mem start_max_mem
@@ -1809,7 +1796,7 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
 
     init_and_go = do
       performGC
-      start_time <- getTimePicoSecs cfgTimeMode
+      start_time <- getPicoSecs
       Measured m0 _ <- measure menv 1 b
       debugStr' menv $ formatMeasurement m0
       go series start_time m0 $ Acc
@@ -1941,9 +1928,10 @@ summarize acc (Estimate measN stdevN) = Summary
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
-scale (Measurement n t a c m) = Measurement n t' a' c' m
+scale (Measurement n t p a c m) = Measurement n t' p' a' c' m
   where
     t' = t `quot` n
+    p' = p `quot` n
     a' = a `quot` n
     c' = c `quot` n
 {-# INLINE scale #-}
