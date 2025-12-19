@@ -759,6 +759,10 @@ putDocWith :: Int -> MEnv -> Doc -> IO ()
 putDocWith n menv doc =
   when (n <= cfgVerbosity (meConfig menv)) $ putDoc menv doc
 
+isVerbose :: MEnv -> Bool
+isVerbose e = 1 < cfgVerbosity (meConfig e)
+{-# INLINABLE isVerbose #-}
+
 
 -- ------------------------------------------------------------------------
 -- Formatting
@@ -816,19 +820,21 @@ formatSlowDown result ratio = case percents `compare` 0 of
     in_yellow test = (if test result then yellow else white) . fromString
 
 formatOutlierVariance :: OutlierVariance -> Doc
-formatOutlierVariance (OutlierVariance !oe _ frac) = case oe of
-  Moderate -> show_oe
-  Severe   -> show_oe
-  _        -> ""
-  where
-    show_oe =
-      white "\nvariance introduced by outliers: " <>
-      stringToDoc (printf "%2d%% " (round (frac * 100) :: Int)) <>
-      white ("(" <> stringToDoc (map toLower (show oe)) <> "ly inflated)")
+formatOutlierVariance (OutlierVariance !oe !_ frac) = Doc $ \ !menv ->
+  let show_oe effect =
+        white "\nvariance introduced by outliers: " <>
+        stringToDoc (printf "%2d%% " (round (frac * 100) :: Int)) <>
+        white ("(" <> effect <>")")
+  in  docToString menv $ case oe of
+    Unaffected | isVerbose menv -> show_oe "unaffected"
+    Slight | isVerbose menv     -> show_oe "slightly inflated"
+    Moderate                    -> show_oe "moderately inflated"
+    Severe                      -> show_oe "severely inflated"
+    _                           -> ""
 
 formatOutliers :: Outliers -> Doc
 formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
-  if 1 < cfgVerbosity (meConfig menv) && 0 < os then
+  if isVerbose menv && 0 < os then
     docToString menv msg
   else
     ""
