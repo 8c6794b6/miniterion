@@ -361,7 +361,7 @@ defaultMainWith cfg bs = do
 defaultConfig :: Config
 defaultConfig = Config
   { cfgUseColor = Auto
-  , cfgMatch = Prefix
+  , cfgMatchMode = Prefix
   , cfgTimeout = NoTimeout
   , cfgBaselinePath = Nothing
   , cfgCsvPath = Nothing
@@ -377,7 +377,7 @@ defaultConfig = Config
 data Config = Config
   { cfgUseColor     :: !UseColor
     -- ^ When to use colored outputs.
-  , cfgMatch        :: !MatchMode
+  , cfgMatchMode    :: !MatchMode
     -- ^ Which mode to use for benchmark name pattern match.
   , cfgTimeout      :: !Timeout
     -- ^ Timeout duration in seconds.
@@ -930,7 +930,7 @@ isMatched :: MEnv -> String -> Bool
 isMatched MEnv{..} fullname = null mePatterns || has_match
   where
     has_match = any is_match mePatterns
-    is_match str = case cfgMatch meConfig of
+    is_match str = case cfgMatchMode meConfig of
       Glob     -> glob str fullname
       IPattern -> substring (map toLower str) (map toLower fullname)
       Pattern  -> substring str fullname
@@ -1486,7 +1486,7 @@ options =
                  ,("ipattern", IPattern)]
          match str = isPrefixOf str . fst
      in  ReqArg (\str (O c m) -> case find (match str) modes of
-                    Just (_, mode) -> O (c {cfgMatch = mode}) m
+                    Just (_, mode) -> O (c {cfgMatchMode = mode}) m
                     _              -> throw (InvalidArgument "match" str))
          "MODE")
     (unlines
