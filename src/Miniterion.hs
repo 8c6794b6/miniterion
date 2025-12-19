@@ -92,6 +92,8 @@ import           Data.List              (intercalate, isPrefixOf, nub, sort,
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
 import           GHC.Clock              (getMonotonicTimeNSec)
+import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
+                                         textEncodingName, utf8)
 import           GHC.Stats              (RTSStats (..), getRTSStats,
                                          getRTSStatsEnabled)
 import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
@@ -117,11 +119,6 @@ import           Data.Foldable          (foldl')
 import           GHC.Exts               (SPEC (..))
 #else
 import           GHC.Exts               (SpecConstrAnnotation (..))
-#endif
-
-#if MIN_VERSION_base(4,5,0)
-import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
-                                         textEncodingName, utf8)
 #endif
 
 #if defined(mingw32_HOST_OS)
@@ -345,9 +342,7 @@ benchmark = void . runBenchmark defaultMEnv . bench "..."
 defaultMainWith :: Config -> [Benchmark] -> IO ()
 defaultMainWith cfg bs = do
   let act = defaultMainWith' cfg bs
-#if MIN_VERSION_base(4,5,0)
   setLocaleEncoding utf8
-#endif
 #if defined(mingw32_HOST_OS)
   codePage <- getConsoleOutputCP
   bracket (setConsoleOutputCP 65001) (\_ -> setConsoleOutputCP codePage)
@@ -516,7 +511,7 @@ data MEnv = MEnv
     -- ^ 'True' if using colored output.
   , meSupportsUnicode :: !Bool
     -- ^ 'True' if unicode is supported.
-  , meHasGCStats      :: !Bool
+  , meHasRTSStats     :: !Bool
     -- ^ 'True' if GC statistics are available.
   }
 
@@ -530,7 +525,7 @@ defaultMEnv = MEnv
   , meConfig = defaultConfig
   , meUseColor = False
   , meSupportsUnicode = False
-  , meHasGCStats = False
+  , meHasRTSStats = False
   }
 {-# INLINABLE defaultMEnv #-}
 
@@ -542,12 +537,12 @@ getDefaultMEnv !cfg = do
     Never  -> pure False
     Auto   -> hIsTerminalDevice stdout
   supports_unicode <- isUnicodeSupported
-  has_gc_stats <- getGCStatsEnabled
+  has_rts_stats <- getRTSStatsEnabled
   pure $! defaultMEnv
     { meConfig = cfg
     , meUseColor = use_color
     , meSupportsUnicode = supports_unicode
-    , meHasGCStats = has_gc_stats
+    , meHasRTSStats = has_rts_stats
     }
 {-# INLINABLE getDefaultMEnv #-}
 
@@ -683,7 +678,7 @@ runBenchmarkable idx fullname b = do
   liftIO $ case mb_sum of
     Nothing -> mapM_ (putFailedJSON idx fullname) meJsonHandle
     Just summary -> do
-      mapM_ (putCsvLine meHasGCStats fullname summary) meCsvHandle
+      mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
       mapM_ (putSummaryJSON idx fullname summary) meJsonHandle
 
   pure result
@@ -858,7 +853,7 @@ formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
 formatGC :: Measurement -> Doc
 formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
   Doc $ \ !e ->
-  if meHasGCStats e then
+  if meHasRTSStats e then
     let sb !b = fromString $! showBytes b
     in  docToString e $ "\n" <>
         white "        alloc  copied    peak" <> "\n" <>
@@ -872,7 +867,7 @@ formatMeasurement (Measurement n t _ a c m) =
   (if n == 1 then " iteration gives " else " iteragions give ") <>
   showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
   Doc (\ !menv ->
-         if meHasGCStats menv then
+         if meHasRTSStats menv then
            printf " alloc: %d copied: %d max: %d" a c m
          else
            "") <>
@@ -1008,18 +1003,14 @@ mu menv = if meSupportsUnicode menv then 'μ' else 'u'
 {-# INLINE mu #-}
 
 isUnicodeSupported :: IO Bool
-#if MIN_VERSION_base(4,5,0)
 isUnicodeSupported = do
   enc <- getLocaleEncoding
   let utf_prefix = take 3 (textEncodingName enc) == "UTF"
-#  if defined(mingw32_HOST_OS)
+#if defined(mingw32_HOST_OS)
   is_65001 <- fmap (== 65001) getConsoleOutputCP
   pure utf_prefix && is_65001
-#  else
-  pure utf_prefix
-#  endif
 #else
-  pure False
+  pure utf_prefix
 #endif
 {-# INLINABLE isUnicodeSupported #-}
 
@@ -1075,7 +1066,7 @@ withCsvSettings menv0@MEnv{meConfig=cfg} act = do
     Nothing -> act menv1 {meCsvHandle = Nothing}
     Just path -> withFile path WriteMode $ \hdl -> do
       hSetBuffering hdl LineBuffering
-      let extras | meHasGCStats menv0 = ",Allocated,Copied,Peak Memory"
+      let extras | meHasRTSStats menv0 = ",Allocated,Copied,Peak Memory"
                  | otherwise = ""
           header = "Name,Mean,MeanLB,MeanUB,Stddev,StddevLB,StddevUB"
       hPutStrLn hdl (header ++ extras)
@@ -1579,31 +1570,12 @@ picoToSecs pico = word64ToDouble pico / 1e12
 -- ------------------------------------------------------------------------
 
 getAllocsAndCopied :: Bool -> IO (Word64, Word64, Word64)
-getAllocsAndCopied has_gc_stats =
-#if MIN_VERSION_base(4,10,0)
-  if not has_gc_stats then pure (0, 0, 0) else
-    (\s -> (allocated_bytes s, copied_bytes s, max_mem_in_use_bytes s))
-    <$> getRTSStats
-#elif MIN_VERSION_base(4,6,0)
-  if not has_gc_stats then pure (0, 0, 0) else
-    (\s -> (int64ToWord64 $ bytesAllocated s,
-            int64ToWord64 $ bytesCopied s,
-            int64ToWord64 $ peakMegabytesAllocated s * 1024 * 1024))
-    <$> getGCStats
-#else
-    pure (0, 0, 0)
-#endif
+getAllocsAndCopied has_rts_stats
+  | has_rts_stats = do
+    s <- getRTSStats
+    pure (allocated_bytes s, copied_bytes s, max_mem_in_use_bytes s)
+  | otherwise = pure (0, 0, 0)
 {-# INLINABLE getAllocsAndCopied #-}
-
-getGCStatsEnabled :: IO Bool
-#if MIN_VERSION_base(4,10,0)
-getGCStatsEnabled = getRTSStatsEnabled
-#elif MIN_VERSION_base(4,6,0)
-getGCStatsEnabled = getGCStatsEnabled
-#else
-getGCStatsEnabled = pure False
-#endif
-{-# INLINE getGCStatsEnabled #-}
 
 
 -- ------------------------------------------------------------------------
@@ -1757,7 +1729,7 @@ runLoop Benchmarkable{..} n f
 {-# INLINE runLoop #-}
 
 measure :: MEnv -> Word64 -> Benchmarkable -> IO Measured
-measure MEnv{meHasGCStats=gc} num b =
+measure MEnv{meHasRTSStats=gc} num b =
   runLoop b num $ \act -> do
     performMinorGC
     (start_allocs, start_copied, start_max_mem) <- getAllocsAndCopied gc
@@ -2089,12 +2061,6 @@ addOutliers (Outliers n1 ls1 lm1 hm1 hs1) (Outliers n2 ls2 lm2 hm2 hs2) =
 -- ------------------------------------------------------------------------
 -- Converting numbers
 -- ------------------------------------------------------------------------
-
-#if !MIN_VERSION_base(4,10,0) && MIN_VERSION_base(4,6,0)
-int64ToWord64 :: Int64 -> Word64
-int64ToWord64 = fromIntegral
-{-# INLINE int64ToWord64 #-}
-#endif
 
 int64ToDouble :: Int64 -> Double
 int64ToDouble = fromIntegral
