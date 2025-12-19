@@ -443,6 +443,8 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
       root_bs = bgroup "" bs
       do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
       do_bench !menv = runBenchmark menv root_bs
+      with_handles act menv =
+        withCsvSettings menv $ \menv' -> withJSONSettings menv' act
   case run_mode of
     Help     -> showHelp menv0
     _         | not (null errs)     -> errorOptions errs
@@ -450,12 +452,7 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
     Version  -> putStrLn builtWithMiniterion
     DoList   -> showNames menv0 root_bs
     DoIter n -> do_iter n
-    DoBench  -> withHandles menv0 do_bench >>= summariseResults
-
-withHandles :: MEnv -> (MEnv -> IO a) -> IO a
-withHandles menv0 act =
-  withCsvSettings menv0 $ \menv1 -> withJSONSettings menv1 act
-{-# INLINE withHandles #-}
+    DoBench  -> with_handles do_bench menv0 >>= summariseResults
 
 showHelp :: MEnv -> IO ()
 showHelp menv = do
