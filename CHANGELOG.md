@@ -15,7 +15,13 @@
 
 * Support brace expressions in glob.
 
-* Modify the output of ``-v2`` flag to show divided time.
+* Modify the output of ``-v3`` option to show divided time.
+
+* Show ``variance introduced by outliers ...`` message.
+
+* Show outlier counts with ``-v2`` option.
+
+* Modify ``--verbosity`` option to recognize verbosity level 3.
 
 * Perform minor GC after running target function to update RTSStats.
 
@@ -25,7 +31,13 @@
 
 * Add `--iters` option to run benchmarks without analysis.
 
+* Remove `--time-mode` option, always keep track of wall time and cpu
+  time in JSON data.
+
 * Silence the outputs in tests.
+
+* Export ``defaultMainWith``, ``defaultConfig``, ``Config`` and the
+  data types used in the fields of ``Config``.
 
 ## 0.1.1.1 -- 2024-05-29
 
