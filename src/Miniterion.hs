@@ -1830,7 +1830,10 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       if 4 <= acCount acc' &&
          (is_stdev_in_target_range ||
           is_timeout_soon)
-        then pure $ summarize acc' est
+        then do
+          let dur = end_time - start_time
+          verboseStr' menv (white "\nmeasurement took " <> showPicos5 dur)
+          pure $ summarize acc' est
         else go ns start_time m2 acc'
 
 measToSummary :: Measurement -> Summary
