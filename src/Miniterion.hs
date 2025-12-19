@@ -1602,13 +1602,12 @@ instance Semigroup Measured where
     where
       on h g = h (g m1) (g m2)
       add = on (+)
-      max_of = on max
       m3 = Measurement { measIters = measIters m2
                        , measTime = add measTime
                        , measCpuTime = add measCpuTime
                        , measAllocs = add measAllocs
                        , measCopied = add measCopied
-                       , measMaxMem = max_of measMaxMem
+                       , measMaxMem = on max measMaxMem
                        }
   {-# INLINE (<>) #-}
 
