@@ -74,6 +74,7 @@ module Miniterion
   , MEnv
   , getDefaultMEnv
 
+  , Doc
   , docToString
 #endif
   ) where
