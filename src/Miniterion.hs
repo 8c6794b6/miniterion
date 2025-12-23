@@ -660,7 +660,7 @@ runBenchmarkable idx fullname b = do
   debug "\n"
   liftIO $ hFlush stdout
   mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
-  let (!result, mb_cmp) = case mb_sum of
+  let (!result, !mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary {smEstimate=est}) ->
           case compareVsBaseline meBaselineSet fullname est of
@@ -671,12 +671,11 @@ runBenchmarkable idx fullname b = do
                     | cmp <= 1 - cfgFailIfFaster = TooFast fullname
                     | otherwise                  = Done
               in  (is_acceptable, Just cmp)
+      summary = maybe emptySummary id mb_sum
   info (formatResult result mb_sum mb_cmp)
-  liftIO $ case mb_sum of
-    Nothing -> mapM_ (putFailedJSON idx fullname) meJsonHandle
-    Just summary -> do
-      mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
-      mapM_ (putSummaryJSON idx fullname summary) meJsonHandle
+  liftIO $ do
+    mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
+    mapM_ (putJSONObject idx fullname summary) meJsonHandle
   pure result
 
 iterBenchmarkable :: Word64 -> Int -> String -> Benchmarkable
@@ -1179,46 +1178,8 @@ withJSONFile !file !menv !act =
     act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
 {-# INLINABLE withJSONFile #-}
 
-putFailedJSON :: Int -> String -> Handle -> IO ()
-putFailedJSON !idx name hdl = do
-  when (idx /= 0) $ hPutStr hdl ","
-  hPutStr hdl $
-    "{\"reportAnalysis\":" ++ analysis ++
-    ",\"reportKDEs\":" ++ kdes ++
-    ",\"reportKeys\":" ++ keys ++
-    ",\"reportMeasured\":" ++ measured ++
-    ",\"reportName\":" ++ escapeJSON name ++
-    ",\"reportNumber\":" ++ show idx ++
-    ",\"reportOutliers\":" ++ outliers ++
-    "}"
-  where
-    analysis =
-      "{\"anMean\":" ++ est0 ++
-      "," ++ anOutlierVar ++
-      ",\"anRegress\":[{\"regCoeffs\":{\"iters\":" ++ est0 ++
-      "},\"regRSquare\":" ++ est0 ++
-      ",\"regResponder\":\"time\"" ++
-      "}],\"anStdDev\":" ++ est0 ++
-      "}"
-    anOutlierVar =
-      "\"anOutlierVar\":" ++
-      "{\"ovDesc\":\"no\"" ++
-      ",\"ovEffect\":\"Unaffected\"" ++
-      ",\"ovFraction\":0}"
-    est0 =
-      "{\"estError\":" ++
-      "{\"confIntCL\":0.05,\"confIntLDX\":0,\"confIntUDX\":0}" ++
-      ",\"estPoint\":0}"
-    kdes = "[{\"kdePDF\":[],\"kdeType\":\"time\",\"kdeValues\":[]}]"
-    keys = "[]"
-    measured = "[]"
-    outliers =
-      "{\"highMild\":0,\"highSevere\":0" ++
-      ",\"lowMild\":0,\"lowSevere\":0,\"samplesSeen\":0}"
-{-# INLINABLE putFailedJSON #-}
-
-putSummaryJSON :: Int -> String -> Summary -> Handle -> IO ()
-putSummaryJSON !idx name Summary{..} hdl = do
+putJSONObject :: Int -> String -> Summary -> Handle -> IO ()
+putJSONObject !idx !name Summary{..} !hdl = do
   when (idx /= 0) $ hPutStr hdl ","
   hPutStr hdl $
     "{\"reportAnalysis\":" ++ analysis ++
@@ -1297,7 +1258,7 @@ putSummaryJSON !idx name Summary{..} hdl = do
       "}"
       where
         Outliers {..} = smOutliers
-{-# INLINABLE putSummaryJSON #-}
+{-# INLINABLE putJSONObject #-}
 
 -- Simplified variant of Criterion.Report.escapeJSON for String
 -- instead of Text. Does not escape plus character (@+@) and NULL
@@ -1652,6 +1613,17 @@ data Summary = Summary
   , smKDEs       :: KDE
   , smMeasured   :: [Measurement]
   }
+
+emptySummary :: Summary
+emptySummary = measToSummary Measurement
+  { measIters = 0
+  , measTime = 0
+  , measCpuTime = 0
+  , measAllocs = 0
+  , measCopied = 0
+  , measMaxMem = 0
+  }
+{-# INLINABLE emptySummary #-}
 
 square :: Num a => a -> a
 square x = x * x
