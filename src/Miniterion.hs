@@ -656,12 +656,10 @@ runBenchmarkWith !run menv b = fst <$> runMiniterion (go [] 0 b) menv
 runBenchmarkable :: Int -> String -> Benchmarkable -> Miniterion Result
 runBenchmarkable idx fullname b = do
   menv@MEnv{meConfig=Config{..}, ..} <- getMEnv
-
-  infoBenchname fullname
-  debugStr "\n"
+  putBenchname fullname
+  debug "\n"
   liftIO $ hFlush stdout
   mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
-
   let (!result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary {smEstimate=est}) ->
@@ -673,36 +671,32 @@ runBenchmarkable idx fullname b = do
                     | cmp <= 1 - cfgFailIfFaster = TooFast fullname
                     | otherwise                  = Done
               in  (is_acceptable, Just cmp)
-
-  infoStr (formatResult result mb_sum mb_cmp)
+  info (formatResult result mb_sum mb_cmp)
   liftIO $ case mb_sum of
     Nothing -> mapM_ (putFailedJSON idx fullname) meJsonHandle
     Just summary -> do
       mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
       mapM_ (putSummaryJSON idx fullname summary) meJsonHandle
-
   pure result
 
 iterBenchmarkable :: Word64 -> Int -> String -> Benchmarkable
                   -> Miniterion Result
 iterBenchmarkable n _idx fullname b = do
   MEnv{meConfig=Config{..}} <- getMEnv
-
-  infoBenchname fullname
+  putBenchname fullname
   liftIO $ hFlush stdout
   mb_unit <- withTimeout cfgTimeout (liftIO $ runLoop b n id)
-
   case mb_unit of
-    Just () -> infoStr "\n" >> pure Done
+    Just () -> info "\n" >> pure Done
     _ -> do
       let result = TimedOut fullname
-      infoStr (formatResult result Nothing Nothing)
+      info (formatResult result Nothing Nothing)
       pure result
 
-infoBenchname :: String -> Miniterion ()
-infoBenchname name =
-  infoStr (white "benchmarking " <> boldCyan (fromString name) <> " ")
-{-# INLINE infoBenchname #-}
+putBenchname :: String -> Miniterion ()
+putBenchname name =
+  info (white "benchmarking " <> boldCyan (fromString name) <> " ")
+{-# INLINE putBenchname #-}
 
 withTimeout :: Timeout -> Miniterion a -> Miniterion (Maybe a)
 withTimeout tout m@(Miniterion r) = case tout of
@@ -737,15 +731,15 @@ noop = const (pure ())
 -- Printing with verbosity
 -- ------------------------------------------------------------------------
 
-infoStr, _verboseStr, debugStr :: Doc -> Miniterion ()
-infoStr = Miniterion . flip infoStr'
-_verboseStr = Miniterion . flip verboseStr'
-debugStr = Miniterion . flip debugStr'
+info, _verbose, debug :: Doc -> Miniterion ()
+info = Miniterion . flip info'
+_verbose = Miniterion . flip verbose'
+debug = Miniterion . flip debug'
 
-infoStr', verboseStr', debugStr' :: MEnv -> Doc -> IO ()
-infoStr' = putDocWith 1
-verboseStr' = putDocWith 2
-debugStr' = putDocWith 3
+info', verbose', debug' :: MEnv -> Doc -> IO ()
+info' = putDocWith 1
+verbose' = putDocWith 2
+debug' = putDocWith 3
 
 putDocWith :: Int -> MEnv -> Doc -> IO ()
 putDocWith n menv doc =
@@ -1771,7 +1765,7 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       performGC
       start_time <- getPicoSecs
       Measured m0 _ <- measure menv 1 b
-      debugStr' menv $ formatMeasurement m0
+      debug' menv $ formatMeasurement m0
       go series start_time m0 $ Acc
         { acStdevs = []
         , acMeasurements = [m0]
@@ -1781,7 +1775,7 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
     go [] _ _ _ = error "measureUntil.go: empty series"
     go (!n:ns) !start_time m1 !acc = do
       Measured m2 end_time <- measure menv n b
-      debugStr' menv $ formatMeasurement m2
+      debug' menv $ formatMeasurement m2
       let est@(Estimate measN stdevN) = predictPerturbed m1 m2
           !is_stdev_in_target_range =
             stdevN < truncate (cfgRelStDev * word64ToDouble (measTime measN))
@@ -1805,7 +1799,7 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
           is_timeout_soon)
         then do
           let dur = end_time - start_time
-          verboseStr' menv (white "\nmeasurement took " <> showPicos5 dur)
+          verbose' menv (white "\nmeasurement took " <> showPicos5 dur)
           pure $ summarize acc' est
         else go ns start_time m2 acc'
 
