@@ -438,8 +438,7 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
       root_bs = bgroup "" bs
       do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
       do_bench !menv = runBenchmark menv root_bs
-      with_handles act menv =
-        withCsvSettings menv $ \menv' -> withJSONSettings menv' act
+      with_handles = withCsvSettings . withJSONSettings
   case run_mode of
     Help     -> showHelp menv0
     _         | not (null errs)     -> errorOptions errs
@@ -1051,8 +1050,8 @@ putDoc !menv = putStr . docToString menv
 -- XXX: Could use `Data.Set.Set'.
 type Baseline = [String]
 
-withCsvSettings :: MEnv -> (MEnv -> IO a) -> IO a
-withCsvSettings menv0@MEnv{meConfig=cfg} act = do
+withCsvSettings :: (MEnv -> IO a) -> MEnv -> IO a
+withCsvSettings !act menv0@MEnv{meConfig=cfg} = do
   baseline <- maybe mempty readBaseline (cfgBaselinePath cfg)
   let menv1 = menv0 {meBaselineSet = baseline}
   case cfgCsvPath cfg of
@@ -1148,8 +1147,8 @@ encodeCsv xs
 -- use of the same names will help reusing the JSON parser between
 -- Miniterion and Criterion.
 
-withJSONSettings :: MEnv -> (MEnv -> IO a) -> IO a
-withJSONSettings menv@MEnv{meConfig=Config{..}} act =
+withJSONSettings :: (MEnv -> IO a) -> MEnv -> IO a
+withJSONSettings !act menv@MEnv{meConfig=Config{..}} =
   -- When HTML report is specified without JSON output, writing JSON
   -- data to a temporary file.
   case cfgJsonPath of
