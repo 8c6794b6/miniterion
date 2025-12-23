@@ -613,10 +613,10 @@ isTooSlow _          = False
 
 failedNameAndReason :: Result -> Maybe (String, String)
 failedNameAndReason = \case
-  Done          -> Nothing
   TooSlow name  -> Just (name, "too slow")
   TooFast name  -> Just (name, "too fast")
   TimedOut name -> Just (name, "timed out")
+  _             -> Nothing
 {-# INLINE failedNameAndReason #-}
 
 
@@ -660,19 +660,19 @@ runBenchmarkable idx fullname b = do
   debug "\n"
   liftIO $ hFlush stdout
   mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
-  let (!result, !mb_cmp) = case mb_sum of
+  let (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary {smEstimate=est}) ->
           case compareVsBaseline meBaselineSet fullname est of
-            Nothing  -> (Done, Nothing)
-            Just cmp ->
+            Nothing -> (Done, Nothing)
+            just_cmp@(Just cmp) ->
               let is_acceptable
                     | 1 + cfgFailIfSlower <= cmp = TooSlow fullname
                     | cmp <= 1 - cfgFailIfFaster = TooFast fullname
                     | otherwise                  = Done
-              in  (is_acceptable, Just cmp)
+              in  (is_acceptable, just_cmp)
       summary = maybe emptySummary id mb_sum
-  info (formatResult result mb_sum mb_cmp)
+  info (formatResult result summary mb_cmp)
   liftIO $ do
     mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
     mapM_ (putJSONObject idx fullname summary) meJsonHandle
@@ -689,7 +689,7 @@ iterBenchmarkable n _idx fullname b = do
     Just () -> info "\n" >> pure Done
     _ -> do
       let result = TimedOut fullname
-      info (formatResult result Nothing Nothing)
+      info (formatResult result emptySummary Nothing)
       pure result
 
 putBenchname :: String -> Miniterion ()
@@ -753,11 +753,11 @@ isVerbose e = 1 < cfgVerbosity (meConfig e)
 -- Formatting
 -- ------------------------------------------------------------------------
 
-formatResult :: Result -> Maybe Summary -> Maybe Double -> Doc
-formatResult _ Nothing _ =
+formatResult :: Result -> Summary -> Maybe Double -> Doc
+formatResult (TimedOut _) _ _ =
   boldRed "FAIL" <> "\n" <>
   yellow "Timed out while running this benchmark\n\n"
-formatResult res (Just summary) mb_cmp =
+formatResult res summary mb_cmp =
   fail_or_blank <> "\n" <>
   --
   white "time                 " <> showPicos5 (irMid smOLS)   <> "   " <>
@@ -1349,7 +1349,7 @@ options =
       ["Time limit to run a benchmark"
       ,"(default: no timeout)"])
 
-    , Option [] ["color"]
+  , Option [] ["color"]
       (let whens = [("always", Always)
                    ,("auto", Auto)
                    ,("never", Never)]
