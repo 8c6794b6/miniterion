@@ -1162,7 +1162,6 @@ withJSONSettings !act menv@MEnv{meConfig=Config{..}} =
       writeReport tmpJSONFile html
       pure r
     _ -> act menv {meJsonHandle = Nothing}
-{-# INLINABLE withJSONSettings #-}
 
 -- | Temporary file to write JSON data for generating report when the
 -- JSON path was not specified.
@@ -1176,7 +1175,6 @@ withJSONFile !file !menv !act =
     hSetBuffering hdl NoBuffering
     hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
     act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
-{-# INLINABLE withJSONFile #-}
 
 putJSONObject :: Int -> String -> Summary -> Handle -> IO ()
 putJSONObject !idx !name Summary{..} !hdl = do
@@ -1258,7 +1256,6 @@ putJSONObject !idx !name Summary{..} !hdl = do
       "}"
       where
         Outliers {..} = smOutliers
-{-# INLINABLE putJSONObject #-}
 
 -- Simplified variant of Criterion.Report.escapeJSON for String
 -- instead of Text. Does not escape plus character (@+@) and NULL
@@ -1275,7 +1272,6 @@ escapeJSON = ('"' :) . foldr f ['"']
     f '\x2028' = ("\\u2028" ++) -- line separator
     f '\x2029' = ("\\u2029" ++) -- paragraph separator
     f c        = (c:)
-{-# INLINABLE escapeJSON #-}
 
 
 -- ------------------------------------------------------------------------
