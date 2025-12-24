@@ -1847,19 +1847,25 @@ summarize acc (Estimate measN stdevN) = Summary
     !len = fromIntegral (acCount acc)
 
     !mean_all = sum [word64ToDouble t | t <- times] / len
-    (mean_min, mean_max) = minMax times
+    (mean_min, mean_max) = min_max times
     !mean_r = Ranged mean_min (ceiling mean_all) mean_max
 
     !sd_all = computeSSD len mean_all times
     !sd_all_w64 = ceiling sd_all
     !sd_scaled = stdevN `quot` measIters measN
-    (sd_min, sd_max) = minMax (sd_all_w64 : sd_scaled : acStdevs acc)
+    (sd_min, sd_max) = min_max (sd_all_w64 : sd_scaled : acStdevs acc)
 
     (ols, rsq) = regress sd_all xys
     xys = [ (word64ToDouble (measIters m), word64ToDouble (measTime m))
           | m <- measured ]
 
     (kde, outliers, !ov) = kdeAndOutliers mean_r sd_all len times
+
+    min_max = foldl' f z
+      where
+        f (amin, amax) x = (min amin x, max amax x)
+        z = (maxBound, minBound)
+    {-# INLINABLE min_max #-}
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1870,13 +1876,6 @@ scale (Measurement n t p a c m) = Measurement n t' p' a' c' m
     a' = a `quot` n
     c' = c `quot` n
 {-# INLINE scale #-}
-
-minMax :: [Word64] -> (Word64, Word64)
-minMax = foldl' f z
-  where
-    f (amin, amax) x = (min amin x, max amax x)
-    z = (maxBound, minBound)
-{-# INLINABLE minMax #-}
 
 
 -- ------------------------------------------------------------------------
