@@ -70,10 +70,8 @@ module Miniterion
   , showPicos5
   , showBytes
   , mu
-
   , MEnv
   , getDefaultMEnv
-
   , Doc
   , docToString
 #endif
