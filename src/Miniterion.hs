@@ -1657,10 +1657,7 @@ predictPerturbed t1 t2 = Estimate
     lo meas | measTime meas > precision =
               meas { measTime = measTime meas - precision }
             | otherwise = meas { measTime = 0 }
-
-precision :: Word64
-precision = max (fromInteger cpuTimePrecision) oneMillisecond
-{-# INLINEABLE precision #-}
+    precision = max (fromInteger cpuTimePrecision) oneMillisecond
 
 -- | One millisecond in picoseconds.
 oneMillisecond :: Num a => a
