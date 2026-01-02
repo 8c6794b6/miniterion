@@ -124,6 +124,8 @@ benchmarkable = testGroup "benchmarkable"
       defaultMainWith' ["--iters", "3000", "-L", "1"]
       [ bgroup "fib" [ bench "36" (nf fib 36) ]
       ]
+    , testCase "iter invalid arg" $
+      shouldExitFailure $ benchFib4 ["--iter", "foo"]
     ]
 
   , testGroup "interactive"
@@ -185,6 +187,42 @@ options = testGroup "options"
   , testCase "invalid timeout option" $
     shouldExitFailure $ benchFib4 ["--time-limit", "foo"]
 
+  , testCase "confidence interval option" $
+    benchFib4 ["--ci", "0.1"]
+
+  , testCase "short confidence interval option" $
+    benchFib4 ["-I", "0.9"]
+
+  , testCase "too small confidence interval arg" $
+    shouldExitFailure $ benchFib4 ["--ci", "1e-9"]
+
+  , testCase "too large confidence interval arg" $
+    shouldExitFailure $ benchFib4 ["-I", "100"]
+
+  , testCase "not a number confidence interval arg" $
+    shouldExitFailure $ benchFib4 ["--ci", "./out.html"]
+
+  , testCase "resamples option" $
+    benchFib4 ["--resamples", "1500"]
+
+  , testCase "too small resamples arg" $
+    shouldExitFailure $ benchFib4 ["--resamples", "0"]
+
+  , testCase "too large resamples arg" $
+    shouldExitFailure $ benchFib4 ["--resamples", "1000000000"]
+
+  , testCase "color auto" $
+    benchFib4 ["--color", "auto"]
+
+  , testCase "color always" $
+    benchFib4 ["--color", "always"]
+
+  , testCase "color never" $
+    benchFib4 ["--color", "never"]
+
+  , testCase "color invalid arg" $
+    shouldExitFailure $ benchFib4 ["--color", "dwim"]
+
   , testCase "verbosity 0" $
     benchFib4 ["--verbosity", "0"]
 
@@ -193,6 +231,9 @@ options = testGroup "options"
 
   , testCase "verbosity 2" $
     benchFib4 ["-v2"]
+
+  , testCase "verbosity 3" $
+    benchFib4 ["-v", "3"]
 
   , testCase "invalid verbosity" $
     shouldExitFailure $ benchFib4 ["--verbosity", "foo"]
@@ -404,6 +445,13 @@ json :: TestTree
 json = with_json_cleanup $ testGroup "json"
   [ testCase "write json" $
     benchNames ["--json", "mini.json"]
+
+  , testCase "run once and write json" $
+    benchNames ["-s", "Infinity", "--json", "mini.json"]
+
+  , testCase "writing json with timed out result" $
+    shouldExitFailure $
+    benchFib32 ["-s", "0", "-L", "0.1", "--json", "mini.json"]
   ]
   where
     json_cleanup _ = removeFile "mini.json"
