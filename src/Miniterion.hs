@@ -52,14 +52,14 @@ module Miniterion
 
     -- * Turning a suite of benchmarks into a program
   , defaultMain
+  , defaultMainWith
+  , defaultConfig
 
     -- * For interactive use
   , benchmark
 
     -- * Miniterion specific
     -- $miniterion_specific
-  , defaultMainWith
-  , defaultConfig
   , Config(..)
   , UseColor(..)
   , MatchMode(..)
@@ -83,13 +83,16 @@ import           Control.Exception      (Exception (..), SomeException (..),
                                          throwIO)
 import           Control.Monad          (guard, unless, void, when)
 import           Control.Monad.IO.Class (MonadIO (..))
+import           Data.Bits              (shiftL, shiftR, xor, (.|.))
 import           Data.Char              (toLower)
 import           Data.Foldable          (find, foldlM)
 import           Data.Int               (Int64)
 import           Data.List              (intercalate, isPrefixOf, nub, sort,
                                          stripPrefix, tails, unfoldr)
+import           Data.Maybe             (fromMaybe)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
+import           GHC.Arr                (listArray, (!))
 import           GHC.Clock              (getMonotonicTimeNSec)
 import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
                                          textEncodingName, utf8)
@@ -165,11 +168,6 @@ data Benchmarkable = forall a. NFData a =>
 toBenchmarkable :: (Word64 -> IO ()) -> Benchmarkable
 toBenchmarkable f = Benchmarkable noop (const noop) (const f) False
 {-# INLINE toBenchmarkable #-}
-
--- | Run benchmarks and report results, providing an interface
--- compatible with @Criterion.Main.<https://hackage.haskell.org/package/criterion/docs/Criterion-Main.html#v:defaultMain defaultMain>@.
-defaultMain :: [Benchmark] -> IO ()
-defaultMain = defaultMainWith defaultConfig
 
 -- | Attach a name to t'Benchmarkable'.
 --
@@ -328,13 +326,10 @@ whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
 benchmark :: Benchmarkable -> IO ()
 benchmark = void . runBenchmark defaultMEnv . bench "..."
 
--- $miniterion_specific
---
--- Functions and data types for Miniterion specific configuration.
---
--- The data type t'Config' has the same name as
--- @Criterion.Types.<https://hackage.haskell.org/package/criterion/docs/Criterion-Types.html#t:Config Config>@,
--- but the implementation is different.
+-- | Run benchmarks and report results, providing an interface
+-- compatible with @Criterion.Main.<https://hackage.haskell.org/package/criterion/docs/Criterion-Main.html#v:defaultMain defaultMain>@.
+defaultMain :: [Benchmark] -> IO ()
+defaultMain = defaultMainWith defaultConfig
 
 -- | An entry point that can be used as a @main@ function, with
 -- configurable defaults.
@@ -357,15 +352,30 @@ defaultConfig = Config
   { cfgUseColor = Auto
   , cfgMatchMode = Prefix
   , cfgTimeout = NoTimeout
+  , cfgInterval = 0.95
+  , cfgResamples = 1000
+  , cfgRelStDev = 0.05
+  , cfgVerbosity = 1
   , cfgBaselinePath = Nothing
   , cfgCsvPath = Nothing
   , cfgJsonPath = Nothing
   , cfgReportPath = Nothing
   , cfgFailIfFaster = 1.0 / 0.0
   , cfgFailIfSlower = 1.0 / 0.0
-  , cfgRelStDev = 0.05
-  , cfgVerbosity = 1
   }
+
+-- $miniterion_specific
+--
+-- Data types for Miniterion specific configuration.
+--
+-- The t'Config' and some of the data used in the fields of t'Config'
+-- are Miniterion specific data type. Their purpose and name may
+-- overlap with those of other benchmark packages, but they could not
+-- used as a drop-in replacement.
+--
+-- The data type t'Config' has the same name as
+-- @Criterion.Types.<https://hackage.haskell.org/package/criterion/docs/Criterion-Types.html#t:Config Config>@,
+-- but the implementation is different.
 
 -- | Data type to hold configuration information.
 data Config = Config
@@ -375,6 +385,10 @@ data Config = Config
     -- ^ Which mode to use for benchmark name pattern match.
   , cfgTimeout      :: !Timeout
     -- ^ Timeout duration in seconds.
+  , cfgInterval     :: !Double
+    -- ^ Confidence interval
+  , cfgResamples    :: !Word64
+    -- ^ Number of bootstrap resamples to perform
   , cfgRelStDev     :: !Double
     -- ^ Relative standard deviation for terminating benchmarks.
   , cfgVerbosity    :: !Int
@@ -630,7 +644,7 @@ iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
 
 runBenchmarkWith :: (Int -> String -> Benchmarkable -> Miniterion a)
                  -> MEnv -> Benchmark -> IO [a]
-runBenchmarkWith !run menv b = fst <$> runMiniterion (go [] 0 b) menv
+runBenchmarkWith !run !menv b = fst <$> runMiniterion (go [] 0 b) menv
   where
     -- Benchmarks are always wrapped with the root group in
     -- defaultMainWith', selecting the benchmarks to run in Bgroup's
@@ -669,11 +683,11 @@ runBenchmarkable idx fullname b = do
                     | cmp <= 1 - cfgFailIfFaster = TooFast fullname
                     | otherwise                  = Done
               in  (is_acceptable, just_cmp)
-      summary = maybe emptySummary id mb_sum
+      summary = fromMaybe emptySummary mb_sum
   info (formatResult result summary mb_cmp)
   liftIO $ do
     mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
-    mapM_ (putJSONObject idx fullname summary) meJsonHandle
+    mapM_ (putJSONObject idx fullname cfgInterval summary) meJsonHandle
   pure result
 
 iterBenchmarkable :: Word64 -> Int -> String -> Benchmarkable
@@ -825,8 +839,8 @@ formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
     os = ls + lm + hm + hs
     frac n = (100::Double) * fromIntegral n / fromIntegral seen
     msg =
-      "\n" <> white "found " <> stringToDoc (show os) <>
-      white " outliers among " <> stringToDoc (show seen) <>
+      "\n" <> white "found " <> showDoc os <>
+      white " outliers among " <> showDoc seen <>
       white " samples (" <> stringToDoc (printf "%.1g%%" (frac os)) <>
       white ")" <>
       f ls "low severe" <>
@@ -835,7 +849,7 @@ formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
       f hs "high severe"
     f n what =
       if 0 < n then
-        "\n  " <> stringToDoc (show n) <> white " (" <>
+        "\n  " <> showDoc n <> white " (" <>
         stringToDoc (printf "%.1g%%" (frac n)) <> white ") " <>
         white what
       else
@@ -852,9 +866,19 @@ formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
   else
     ""
 
+formatBootstrap :: Word64 -> Word64 -> Word64 -> Doc
+formatBootstrap nresample nvalid nmeas =
+  white "analysing with " <> showDoc nresample <> white " resamples\n" <>
+  white "bootstrapping with " <> showDoc nvalid <> white " of " <>
+  showDoc nmeas <> white " samples (" <> showDoc percent <> "%)"
+  where
+    percent :: Int
+    percent =
+      truncate ((fromIntegral nvalid / fromIntegral nmeas :: Double) * 100)
+
 formatMeasurement :: Measurement -> Doc
 formatMeasurement (Measurement n t _ a c m) =
-  fromString (show n) <>
+  showDoc n <>
   (if n == 1 then " iteration gives " else " iteragions give ") <>
   showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
   Doc (\ !menv ->
@@ -1041,6 +1065,11 @@ putDoc :: MEnv -> Doc -> IO ()
 putDoc !menv = putStr . docToString menv
 {-# INLINE putDoc #-}
 
+-- | Apply 'show' and then convert to t'Doc'.
+showDoc :: Show a => a -> Doc
+showDoc = stringToDoc . show
+{-# INLINE showDoc #-}
+
 
 -- ------------------------------------------------------------------------
 -- CSV
@@ -1140,11 +1169,9 @@ encodeCsv xs
 -- ------------------------------------------------------------------------
 
 -- The JSON report made by Miniterion differs from the one made by
--- Criterion. Some of the keys have the same names but the meaning
--- differs (e.g., confIntLDX, confIntUDX), some of the values are
--- missing (e.g., 'y' in regCoeffs, Measurement fields). Hope that the
--- use of the same names will help reusing the JSON parser between
--- Miniterion and Criterion.
+-- Criterion. Some of the values are missing (e.g., 'y' in regCoeffs,
+-- Measurement fields). Hope that the use of the same names will help
+-- reusing the JSON parser between Miniterion and Criterion.
 
 withJSONSettings :: (MEnv -> IO a) -> MEnv -> IO a
 withJSONSettings !act menv@MEnv{meConfig=Config{..}} =
@@ -1174,8 +1201,8 @@ withJSONFile !file !menv !act =
     hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
     act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
 
-putJSONObject :: Int -> String -> Summary -> Handle -> IO ()
-putJSONObject !idx !name Summary{..} !hdl = do
+putJSONObject :: Int -> String -> Double -> Summary -> Handle -> IO ()
+putJSONObject !idx !name !ci Summary{..} hdl = do
   when (idx /= 0) $ hPutStr hdl ","
   hPutStr hdl $
     "{\"reportAnalysis\":" ++ analysis ++
@@ -1195,7 +1222,7 @@ putJSONObject !idx !name Summary{..} !hdl = do
       "}"
       where
         est (Ranged lo mid hi) =
-          "{\"estError\":{\"confIntCL\":0.05" ++
+          "{\"estError\":{\"confIntCL\":" ++ show ci ++
           ",\"confIntLDX\":" ++ show (mid - lo) ++
           ",\"confIntUDX\":" ++ show (hi - mid) ++
           "},\"estPoint\":" ++ show mid ++
@@ -1333,15 +1360,29 @@ options =
     (NoArg (\(O c _) -> O c Help))
     "Show this help text"
 
+  , Option ['I'] ["ci"]
+    (ReqArg (\str (O c m) -> case parseRanged "ci" 1.0e-3 0.999 str of
+                Right n  -> O (c {cfgInterval=n}) m
+                Left err -> throw err)
+     "CI")
+    "Confidence interval (default: 0.95)"
+
   , Option ['L'] ["time-limit"]
     (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Double of
-                Just n -> O (c {cfgTimeout = Timeout (floor (1e6 * n))}) m
+                Just n -> O (c {cfgTimeout = Timeout (truncate (1e6 * n))}) m
                 _      -> throw (InvalidArgument "time-limit" str))
-      "SECS")
+     "SECS")
 
     (unlines
       ["Time limit to run a benchmark"
       ,"(default: no timeout)"])
+
+  , Option [] ["resamples"]
+    (ReqArg (\str (O c m) -> case parseRanged "resamples" 1 1000000 str of
+                Right n  -> O (c {cfgResamples=n}) m
+                Left err -> throw err)
+    "COUNT")
+    "Number of bootstrap resamples to perform\n(default: 1000)"
 
   , Option [] ["color"]
       (let whens = [("always", Always)
@@ -1442,6 +1483,17 @@ options =
     "Show version info"
   ]
 
+parseRanged :: (Ord a, Read a, Show a)
+            => String -> a -> a -> String -> Either MiniterionException a
+parseRanged lbl lo hi str =
+  case readMaybe str of
+    Just n | lo <= n && n <= hi -> Right n
+    Just n                      -> Left (out_of_range (show n))
+    Nothing                     -> Left (InvalidArgument lbl str)
+  where
+    out_of_range val =
+      OutOfRangeArgument lbl val ("(" ++ show lo ++ "," ++ show hi ++ ")")
+
 parseNonNegativeParcents :: String -> Maybe Double
 parseNonNegativeParcents = parsePercentsWith (>= 0)
 
@@ -1461,6 +1513,7 @@ parsePercentsWith test xs = do
 
 data MiniterionException
   = InvalidArgument String String
+  | OutOfRangeArgument String String String
   | CannotReadFile (Maybe String) String
   | UninitializedEnv [String]
   | GlobUnbalancedBracket String
@@ -1474,6 +1527,8 @@ displayMiniterionException :: MiniterionException -> String
 displayMiniterionException = \case
   InvalidArgument lbl arg ->
     "invalid argument `" ++ arg ++ "'" ++ maybe_label (Just lbl)
+  OutOfRangeArgument lbl val rng ->
+    val ++ " is outside range " ++ rng ++ maybe_label (Just lbl)
   CannotReadFile mb_lbl path ->
     "cannot read file `" ++ path ++ "'" ++ maybe_label mb_lbl
   UninitializedEnv groups ->
@@ -1569,6 +1624,11 @@ type OLS = Ranged Word64
 type R2 = Ranged Double
 type Mean = Ranged Word64
 type Stdev = Ranged Word64
+
+-- According to the UNPACK section of the ghc users guide, the two
+-- lists fields in Acc are Sum types, thus -funbox-strict-fields does
+-- not unpack them. Explicitly telling GHC to unpack the list fields,
+-- since the fields does not perform expensive computations.
 
 data KDE = KDE
   { kdValues :: {-# UNPACK #-} ![Double]
@@ -1709,7 +1769,7 @@ measure MEnv{meHasRTSStats=gc} num b =
     pure $ Measured meas end_time
 
 measureUntil :: MEnv -> Benchmarkable -> IO Summary
-measureUntil menv@MEnv{meConfig=Config{..}} b
+measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
   | is_once = fmap (measToSummary . mdMeas) (measure menv 1 b)
   | otherwise = init_and_go
   where
@@ -1730,9 +1790,9 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
       Measured m0 _ <- measure menv 1 b
       debug' menv $ formatMeasurement m0
       go series start_time m0 $ Acc
-        { acStdevs = []
-        , acMeasurements = [m0]
-        , acCount = if threshold < measTime m0 then 1 else 0
+        { acMeasurements = [m0]
+        , acCount = 1
+        , acValidCount = if threshold < measTime m0 then 1 else 0
         }
 
     go [] _ _ _ = error "measureUntil.go: empty series"
@@ -1747,23 +1807,25 @@ measureUntil menv@MEnv{meConfig=Config{..}} b
               let next_end = end_time + measTime m2*2 + 30*oneMillisecond
               in  micros * 1000000 < next_end - start_time
             _ -> False
-          !count | threshold < measTime m2 = acCount acc + 1
-                 | otherwise = acCount acc
-          !acc' = acc { acStdevs = (stdevN `quot` n) : acStdevs acc
-                      , acMeasurements = m2 : acMeasurements acc
-                      , acCount = count
+          !valid_count | threshold < measTime m2 = acValidCount acc + 1
+                       | otherwise = acValidCount acc
+          !acc' = acc { acMeasurements = m2 : acMeasurements acc
+                      , acCount = acCount acc + 1
+                      , acValidCount = valid_count
                       }
       warnOnTooLongBenchmark cfgTimeout start_time end_time
       -- Need at least 4 long enough measurements to get IQR while
       -- computing KDE. Later the measurement data are filtered in the
       -- 'summarize' function.
-      if 4 <= acCount acc' &&
+      if 4 <= acValidCount acc' &&
          (is_stdev_in_target_range ||
           is_timeout_soon)
         then do
           let dur = end_time - start_time
-          verbose' menv (white "\nmeasurement took " <> showPicos5 dur)
-          pure $ summarize acc' est
+          verbose' menv $
+            white "\nmeasurement took " <> showPicos5 dur <> "\n" <>
+            formatBootstrap cfgResamples (acValidCount acc') (acCount acc')
+          pure $ summarize cfg start_time acc' est
         else go ns start_time m2 acc'
 
 measToSummary :: Measurement -> Summary
@@ -1797,37 +1859,24 @@ warnOnTooLongBenchmark tout t_start t_now =
 -- Accumulator for measureUntil
 -- ------------------------------------------------------------------------
 
--- According to the UNPACK section of the ghc users guide, the two
--- lists fields in Acc are Sum types, thus -funbox-strict-fields does
--- not unpack them. Explicitly telling GHC to unpack the list fields,
--- since the fields does not perform expensive computations.
-
 data Acc = Acc
-  { acStdevs       :: {-# UNPACK #-} ![Word64]
-  , acMeasurements :: {-# UNPACK #-} ![Measurement]
-  , acCount        :: !Word64
+  { acCount        :: !Word64 -- ^ Number of measurements
+  , acValidCount   :: !Word64 -- ^ Number of measurements longer than threshold
+  , acMeasurements :: [Measurement]
   }
-
--- XXX: Order of fields make difference in performance?
---
--- data Acc = Acc
---   { acCount        :: !Word64
---   , acMeasurements :: {-# UNPACK #-} ![Measurement]
---   , acStdevs       :: {-# UNPACK #-} ![Word64]
---   }
 
 -- | 30 milliseconds in picosecond.
 threshold :: Word64
 threshold = 30000000000
 {-# INLINE threshold #-}
 
-summarize :: Acc -> Estimate -> Summary
-summarize acc (Estimate measN stdevN) = Summary
-  { smEstimate = Estimate meas sd_scaled
+summarize :: Config -> Seed -> Acc -> Estimate -> Summary
+summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
+  { smEstimate = Estimate meas (irMid stdev)
   , smOLS = ols
-  , smR2 = rsq
-  , smStdev = Ranged sd_min sd_all_w64 sd_max
-  , smMean = mean_r
+  , smR2 = r2
+  , smStdev = stdev
+  , smMean = mean
   , smOutlierVar = ov
   , smOutliers = outliers
   , smKDEs = kde
@@ -1835,35 +1884,33 @@ summarize acc (Estimate measN stdevN) = Summary
   }
   where
     meas = scale measN
-    measured = reverse (acMeasurements acc)
+    measured = reverse acMeasurements
+    !nc = word64ToDouble acCount
+    !nvc = word64ToDouble acValidCount
 
-    -- Filtering out measurements with too short total duration, since
-    -- those data are considered imprecise and unreliable. See
-    -- 'Criterion.Analysis.analyseSample'.
-    times = [ measTime m `quot` measIters m
-            | m <- measured, threshold < measTime m ]
-    !len = fromIntegral (acCount acc)
+    bootstrap' :: Ord a => ([a] -> (Double, Double)) -> Word64 -> [a]
+               -> (Ranged Double, Ranged Double)
+    bootstrap' = bootstrap2 seed cfgResamples cfgInterval
 
-    !mean_all = sum [word64ToDouble t | t <- times] / len
-    (mean_min, mean_max) = min_max times
-    !mean_r = Ranged mean_min (ceiling mean_all) mean_max
-
-    !sd_all = computeSSD len mean_all times
-    !sd_all_w64 = ceiling sd_all
-    !sd_scaled = stdevN `quot` measIters measN
-    (sd_min, sd_max) = min_max (sd_all_w64 : sd_scaled : acStdevs acc)
-
-    (ols, rsq) = regress sd_all xys
-    xys = [ (word64ToDouble (measIters m), word64ToDouble (measTime m))
-          | m <- measured ]
-
-    (kde, outliers, !ov) = kdeAndOutliers mean_r sd_all len times
-
-    min_max = foldl' f z
+    -- Filtering out measurements with too short total duration for
+    -- `times', since those data are considered imprecise and
+    -- unreliable. See 'Criterion.Analysis.analyseSample'.
+    (times, xys) = foldl' f ([],[]) measured
       where
-        f (amin, amax) x = (min amin x, max amax x)
-        z = (maxBound, minBound)
-    {-# INLINABLE min_max #-}
+        f (!as, !bs) Measurement{..} =
+          let i = word64ToDouble measIters
+              t = word64ToDouble measTime
+              as' = if threshold < measTime then t/i : as else as
+          in  (as', (i, t) : bs)
+
+    (mean_d, stdev_d) = bootstrap' (meanAndStdDev nvc) acValidCount times
+    mean = fmap ceiling mean_d
+    stdev = fmap ceiling stdev_d
+
+    (ols_d, r2) = bootstrap' (regress nc) acCount xys
+    ols = fmap ceiling ols_d
+
+    (kde, outliers, !ov) = kdeAndOutliers (irMid stdev_d) nvc times
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1894,65 +1941,105 @@ toRanged x = Ranged x x x
 
 
 -- ------------------------------------------------------------------------
+-- Bootstrap
+-- ------------------------------------------------------------------------
+
+bootstrap2 :: (Ord b, Ord c)
+           => Seed           -- ^ Random seed
+           -> Word64         -- ^ Number of resamples
+           -> Double         -- ^ Confidence interval
+           -> ([a] -> (b,c)) -- ^ Function applied to each resample
+           -> Word64         -- ^ Length of the original list
+           -> [a]            -- ^ The original list
+           -> (Ranged b, Ranged c)
+bootstrap2 !seed !nresamp !ci !f !norig orig = (br, cr)
+  where
+    !br = confInterval b ci nresampd bs
+    !cr = confInterval c ci nresampd cs
+    (!b, !c) = f orig
+    (!bs, !cs) = unzip (resample seed nresamp f norig orig)
+    !nresampd = word64ToDouble nresamp
+{-# INLINE bootstrap2 #-}
+
+confInterval :: Ord a
+             => a      -- ^ The point value
+             -> Double -- ^ Interval
+             -> Double -- ^ Length of the list
+             -> [a]    -- ^ The list
+             -> Ranged a
+confInterval !mid !i !n xs = Ranged lo mid hi
+  where
+    !lo = xs' !! truncate (n' * half_of_i)
+    !hi = xs' !! ceiling (n' * (1 - half_of_i))
+    half_of_i = (1-i) / 2
+    n' = n - 1
+    xs' = sort xs
+{-# INLINE confInterval #-}
+
+resample :: Seed       -- ^ Random seed.
+         -> Word64     -- ^ Number of resamples.
+         -> ([a] -> b) -- ^ Function applied to each resample.
+         -> Word64     -- ^ Length of the original sample.
+         -> [a]        -- ^ Original sample.
+         -> [b]
+resample !seed !nresamp !f !norig orig = go nresamp [] idxs0
+  where
+    idxs0 = randoms seed norig
+    !orig_arr = listArray (0, norig - 1) orig
+    go 0 !acc _    = acc
+    go n !acc idxs = go (n-1) acc' idxs'
+      where
+        (is, idxs') = splitAt (word64ToInt norig) idxs
+        !acc' = let !bs = f [orig_arr ! i | i <- is] in bs : acc
+{-# INLINE resample #-}
+
+
+-- ------------------------------------------------------------------------
 -- Analysis
 -- ------------------------------------------------------------------------
 
--- | Simple linear regression with ordinary least square.
-regress :: Double             -- ^ Sample standard deviation
-        -> [(Double, Double)] -- ^ Pair of x and y values
-        -> (OLS, R2)
-regress ssd xs_and_ys = (ols, r2)
+-- | Compute mean and standard deviation.
+meanAndStdDev :: Double -- ^ Length of the samples
+              -> [Double] -- ^ The samples
+              -> (Double, Double) -- ^ (mean, standard deviation)
+meanAndStdDev !n xs = (mean, stddev)
   where
-    ols = fmap ceiling (ci95 sample_size ssd a)
-    r2 = Ranged (fr2 (-1)) (fr2 0) (fr2 1)
+    mean = sum xs / n
+    stddev = sqrt (sum [square (x - mean) | x <- xs] / n)
 
-    -- means and sample size
-    (x_mean, y_mean, sample_size) = (sum_x / n, sum_y / n, n)
+-- | Simple linear regression with ordinary least square.
+regress :: Double             -- ^ Length of the list
+        -> [(Double, Double)] -- ^ List of x and y values
+        -> (Double, Double)
+regress n xs_and_ys = (a, r2)
+  where
+    -- means
+    (!x_mean, !y_mean) = (sum_x / n, sum_y / n)
       where
-        n = fromIntegral len
-        (sum_x, sum_y, len) = foldl' f z xs_and_ys
-        f (!sx, !sy, !sl) (x,y) = (sx + x, sy + y, sl + 1)
-        z = (0, 0, 0 :: Int)
+        (!sum_x, !sum_y) = foldl' f (0,0) xs_and_ys
+        f (!sx, !sy) (x, y) = (sx + x,  sy + y)
 
-    -- ols
-    nume = sum [(x - x_mean) * (y - y_mean) | (x,y) <- xs_and_ys]
-    deno = sum [square (x - x_mean) | (x,_) <- xs_and_ys]
-    a = nume / deno
-    b = y_mean - (a * x_mean)
+    -- ols and sst
+    (!nume, !deno, !sst) = foldl' f (0,0,0) xs_and_ys
+      where
+        f (!nu, !de, !ss) (x, y) =
+          let dx = x - x_mean
+              dy = y - y_mean
+          in  (nu + dx * dy, de + square dx, ss + square dy)
+    !a = nume / deno
+    -- b = y_mean - (a * x_mean)
 
-    -- R^2
-    p k x = a * x + k * b
-    ssr k = sum [square (y - p k x) | (x,y) <- xs_and_ys]
-    sst = sum [square (y - y_mean) | (_,y) <- xs_and_ys]
-    fr2 k = 1 - (ssr k / sst)
+    -- ssr and R^2
+    !ssr = sum [square (y - a * x) | (x,y) <- xs_and_ys]
+    !r2 = 1 - (ssr / sst)
 {-# INLINABLE regress #-}
 
--- | Compute sample standard deviation.
-computeSSD :: Double   -- ^ Length of the list of values
-           -> Double   -- ^ Mean
-           -> [Word64] -- ^ List of values
-           -> Double
-computeSSD !n !mean xs =
-  sqrt (sum [square (word64ToDouble x - mean) | x <- xs] / (n-1))
-{-# INLINABLE computeSSD #-}
-
--- | Compute 95% confidence interval from sample standard deviation.
-ci95 :: Double -- ^ Number of samples.
-     -> Double -- ^ Sample standard deviation.
-     -> Double -- ^ The point value.
-     -> Ranged Double
-ci95 n ssd x = Ranged (x-w) x (x+w)
-  where
-    !w = (ssd / sqrt n) * 1.96
-{-# INLINABLE ci95 #-}
-
 -- | Compute kernel density estimation and outliers.
-kdeAndOutliers :: Ranged Word64 -- ^ Range to get min and max
-               -> Double        -- ^ Sample standard deviation
-               -> Double        -- ^ Length of the list
-               -> [Word64]      -- ^ The list containing values
+kdeAndOutliers :: Double   -- ^ Sample standard deviation
+               -> Double   -- ^ Length of the list
+               -> [Double] -- ^ The list containing values
                -> (KDE, Outliers, OutlierVariance)
-kdeAndOutliers !mean_w64 !s !n xs_w64 = (kde, outliers, ov)
+kdeAndOutliers !s !n xs_picos = (kde, outliers, ov)
   where
     kde = KDE {kdValues=values, kdPDF=density}
 
@@ -1963,7 +2050,9 @@ kdeAndOutliers !mean_w64 !s !n xs_w64 = (kde, outliers, ov)
         lo' = lo - r/10
         hi' = hi + r/10
         r = hi - lo
-        Ranged lo _ hi = fmap picoToSecs mean_w64
+        (lo, hi) = case xs of
+          []   -> error "kdeAndOutliers: empty list"
+          hd:_ -> (hd, xs !! (truncate n - 1))
 
     -- Using simple Gaussian kernel function and Silverman's rule of
     -- thumb for bandwidth.
@@ -2004,7 +2093,7 @@ kdeAndOutliers !mean_w64 !s !n xs_w64 = (kde, outliers, ov)
     iqr = q3 - q1
     q3 = xs !! ceiling (n * 0.75)
     q1 = xs !! truncate (n * 0.25)
-    xs = sort [picoToSecs x | x <- xs_w64]
+    xs = sort [x / 1e12 | x <- xs_picos]
 {-# INLINABLE kdeAndOutliers #-}
 
 addOutliers :: Outliers -> Outliers -> Outliers
@@ -2014,12 +2103,70 @@ addOutliers (Outliers n1 ls1 lm1 hm1 hs1) (Outliers n2 ls2 lm2 hm2 hs2) =
 
 
 -- ------------------------------------------------------------------------
+-- Random numbers
+-- ------------------------------------------------------------------------
+
+-- See the <https://prng.di.unimi.it/xoshiro256plusplus.c C code> by
+-- the original author and
+-- <https://en.wikipedia.org/wiki/Xorshift#xoshiro256++ Xorshift> page
+-- in Wikipedia.
+
+-- | Alias for random seed.
+type Seed = Word64
+
+-- | State for xoshiro256++.
+data Xoshiro256 = Xoshiro256 !Word64 !Word64 !Word64 !Word64
+
+-- | Infinite list of random numbers.
+randoms :: Seed   -- ^ Random seed
+        -> Word64 -- ^ Upper bound of generated random value (exclusive)
+        -> [Word64]
+randoms seed ub = drop 1 $ unfoldr f (0, xoshiro256init seed)
+  where
+    f (!x, s) = let !x' = x `rem` ub in Just (x', xoshiro256pp s)
+
+xoshiro256pp :: Xoshiro256 -> (Word64, Xoshiro256)
+xoshiro256pp (Xoshiro256 s0 s1 s2 s3) = (result, state)
+  where
+    result = rotl (s0 + s3) 23 + s0
+    t = shiftL s1 17
+    s2' = s2 `xor` s0
+    s3' = s3 `xor` s1
+    s1' = s1 `xor` s2'
+    s0' = s0 `xor` s3'
+    s2'' = s2' `xor` t
+    s3'' = rotl s3' 45
+    state = Xoshiro256 s0' s1' s2'' s3''
+    rotl x k = shiftL x k .|. shiftR x (64 - k)
+
+xoshiro256init :: Seed -> Xoshiro256
+xoshiro256init seed = Xoshiro256 s0 s1 s2 s3
+  where
+    (s0, seed') = splitmix64 seed
+    s1 = shiftR s0 32
+    (s2, _) = splitmix64 seed'
+    s3 = shiftR s2 32
+
+splitmix64 :: Word64 -> (Word64, Word64)
+splitmix64 s = (r3, r0)
+  where
+    r0 = s + 0x9e3779b97f4a7c15
+    r1 = (r0 `xor` shiftR r0 30) * 0xbf58476d1ce4e5b9
+    r2 = (r1 `xor` shiftR r1 27) * 0x94d049bb133111eb
+    r3 = r2 `xor` shiftR r2 31
+
+
+-- ------------------------------------------------------------------------
 -- Converting numbers
 -- ------------------------------------------------------------------------
 
 int64ToDouble :: Int64 -> Double
 int64ToDouble = fromIntegral
 {-# INLINE int64ToDouble #-}
+
+word64ToInt :: Word64 -> Int
+word64ToInt = fromIntegral
+{-# INLINE word64ToInt #-}
 
 word64ToInt64 :: Word64 -> Int64
 word64ToInt64 = fromIntegral
