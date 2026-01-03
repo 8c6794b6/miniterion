@@ -81,7 +81,10 @@ b03 =
      , bgroup "names"
        [ bench "containing \"double quotes\"" (nf fib 8)
        , bench "containing\nnew\nlines" (nf fib 16)
-       , bench "containing '\"' quoted double quote" (nf fib 8)]
+       , bench "containing '\"' quoted double quote" (nf fib 8)
+       , bench "containing gt <, lt >, plus +, and amp &" (nf fib 8)
+       , bench "containing backslash \\\\" (nf fib 8)
+       ]
      , bgroup "wcIO"
        [ bench "nfAppIO" (nfAppIO wcIO file)
        , bench "whnfAppfIO" (whnfAppIO wcIO file) ]
@@ -187,8 +190,24 @@ with_runenv name ini f =
   in  bench name $ perRunEnvWithCleanup alloc cleanup run
 #endif
 
-main :: IO ()
+b06 :: [Benchmark]
+b06 =
+  [ bgroup "comparison"
+    [ bench "exp" $ whnf exp (2 :: Double)
+    , bench "log" $ whnf log (2 :: Double)
+    , bench "sqrt" $ whnf sqrt (2 :: Double)
+    ]
+  ]
 
+b07 :: [Benchmark]
+b07 =
+  [ bgroup "id"
+    [ bench "nf" $ nf id ()
+    , bench "whnf" $ whnf id ()
+    ]
+  ]
+
+main :: IO ()
 main =
   defaultMain
     (concat [ b01
@@ -200,6 +219,8 @@ main =
             , b03
             -- , b04
             , b05
+            , b06
+            , b07
             ])
 
 s, p :: Benchmark
