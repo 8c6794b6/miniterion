@@ -16,10 +16,11 @@ packages ([`criterion`][criterion], [`gauge`][gauge], and
 [`tasty-bench`][tasty-bench]) should be easily done.
 
 As in `criterion`, the executable built with the `defaultMain`
-supports selecting the running benchmarks with prefix match,
-case insensitive prefix match, substring match, or glob pattern match
-via the command line option. Invoke the benchmark executable with `--help`
-option to see other available options.
+supports selecting the running benchmarks with prefix match, case
+insensitive prefix match, substring match, or glob pattern match via
+the command line option. The executable has options to write CSV
+summary, JSON summary, and HTML report. Invoke the benchmark
+executable with `--help` option to see other available options.
 
 
 ## Motivation
@@ -51,7 +52,7 @@ benchmark fibo
     hs-source-dirs:   bench
     main-is:          Main.hs
     build-depends:    base
-                    , miniterion 
+                    , miniterion
 ```
 
 And in file `bench/Main.hs`:
@@ -83,28 +84,37 @@ then compile and run the benchmark with `cabal bench`:
 
 ```console
 $ cabal bench
-Build profile: -w ghc-9.6.2 -O1
+Build profile: -w ghc-9.12.2 -O1
 In order, the following will be built (use -v for more details):
- - miniterion-0.1.0.0 (bench:fibo) (first run)
-Preprocessing benchmark 'fibo' for miniterion-0.1.0.0..
-Building benchmark 'fibo' for miniterion-0.1.0.0..
+ - miniterion-0.1.2.0 (bench:fibo) (first run)
+Preprocessing benchmark 'fibo' for miniterion-0.1.2.0...
+Building benchmark 'fibo' for miniterion-0.1.2.0...
 Running 1 benchmarks...
 Benchmark fibo: RUNNING...
 benchmarking fib/1
-mean                 13.58 ns
-std dev              686.0 ps
+time                 4.954 ns   (4.953 ns .. 4.954 ns)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 4.957 ns   (4.947 ns .. 4.961 ns)
+std dev              12.00 ps   (12.00 ps .. 944.2 μs)
 
 benchmarking fib/5
-mean                 216.6 ns
-std dev              15.78 ns
+time                 39.93 ns   (39.88 ns .. 39.98 ns)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 39.93 ns   (39.73 ns .. 40.62 ns)
+std dev              780.0 ps   (780.0 ps .. 943.8 μs)
 
 benchmarking fib/9
-mean                 1.586 μs
-std dev              89.60 ns
+time                 325.6 ns   (325.5 ns .. 325.6 ns)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 324.9 ns   (324.7 ns .. 325.1 ns)
+std dev              370.0 ps   (370.0 ps .. 944.1 μs)
 
 benchmarking fib/11
-mean                 4.175 μs
-std dev              92.17 ns
+time                 852.6 ns   (852.3 ns .. 852.9 ns)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 854.2 ns   (852.1 ns .. 856.3 ns)
+std dev              4.072 ns   (4.072 ns .. 944.6 μs)
+
 
 Benchmark fibo: FINISH
 ```
