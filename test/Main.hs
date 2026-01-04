@@ -157,6 +157,9 @@ options = testGroup "options"
   , testCase "listing names with short option" $
     benchFib4 ["-l"]
 
+  , testCase "listing names with pattern match" $
+    benchNesting ["-l", "-mg", "c/*/*"]
+
   , testCase "listing name of benchmark using env" $
     benchFib4 ["--list"]
 
