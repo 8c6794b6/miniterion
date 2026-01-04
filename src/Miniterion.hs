@@ -1373,10 +1373,7 @@ options =
                 Just n -> O (c {cfgTimeout = Timeout (truncate (1e6 * n))}) m
                 _      -> throw (InvalidArgument "time-limit" str))
      "SECS")
-
-    (unlines
-      ["Time limit to run a benchmark"
-      ,"(default: no timeout)"])
+    "Time limit to run a benchmark\n(default: no timeout)"
 
   , Option [] ["resamples"]
     (ReqArg (\str (O c m) -> case parseRanged "resamples" 1 1000000 str of
