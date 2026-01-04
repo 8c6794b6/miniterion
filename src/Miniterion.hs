@@ -517,7 +517,7 @@ data MEnv = MEnv
     -- ^ File handle to write benchmark result in CSV format.
   , meJsonHandle      :: !(Maybe Handle)
     -- ^ File handle to write benchmark result of JSON summary.
-  , meBaselineSet     :: !Baseline
+  , meBaseline        :: !Baseline
     -- ^ Set containing baseline information, made from the file
     -- specified by 'cfgBaselinePath'.
   , meUseColor        :: !Bool
@@ -533,7 +533,7 @@ defaultMEnv :: MEnv
 defaultMEnv = MEnv
   { meCsvHandle = Nothing
   , meJsonHandle = Nothing
-  , meBaselineSet = mempty
+  , meBaseline = mempty
   , mePatterns = []
   , meConfig = defaultConfig
   , meUseColor = False
@@ -676,7 +676,7 @@ runBenchmarkable idx fullname b = do
   let (result, mb_cmp) = case mb_sum of
         Nothing -> (TimedOut fullname, Nothing)
         Just (Summary {smEstimate=est}) ->
-          case compareVsBaseline meBaselineSet fullname est of
+          case compareVsBaseline meBaseline fullname est of
             Nothing -> (Done, Nothing)
             just_cmp@(Just cmp) ->
               let is_acceptable
@@ -1080,7 +1080,7 @@ type Baseline = [String]
 withCsvSettings :: (MEnv -> IO a) -> MEnv -> IO a
 withCsvSettings !act menv0@MEnv{meConfig=cfg} = do
   baseline <- maybe mempty readBaseline (cfgBaselinePath cfg)
-  let menv1 = menv0 {meBaselineSet = baseline}
+  let menv1 = menv0 {meBaseline = baseline}
   case cfgCsvPath cfg of
     Nothing -> act menv1 {meCsvHandle = Nothing}
     Just path -> withFile path WriteMode $ \hdl -> do
