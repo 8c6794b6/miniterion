@@ -92,12 +92,6 @@ import           Data.List              (intercalate, isPrefixOf, nub, sort,
 import           Data.Maybe             (fromMaybe)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
-import           GHC.Arr                (listArray, (!))
-import           GHC.Clock              (getMonotonicTimeNSec)
-import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
-                                         textEncodingName, utf8)
-import           GHC.Stats              (RTSStats (..), getRTSStats,
-                                         getRTSStatsEnabled)
 import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
                                          OptDescr (..), getOpt', usageInfo)
 import           System.CPUTime         (cpuTimePrecision, getCPUTime)
@@ -117,15 +111,22 @@ import           Text.Read              (readMaybe)
 import           Data.Foldable          (foldl')
 #endif
 
+#if defined(mingw32_HOST_OS)
+import           Control.Exception      (bracket)
+import           Data.Word              (Word32)
+#endif
+
+-- base, GHC.* modules
+import           GHC.Arr                (listArray, (!))
+import           GHC.Clock              (getMonotonicTimeNSec)
+import           GHC.IO.Encoding        (getLocaleEncoding, setLocaleEncoding,
+                                         textEncodingName, utf8)
+import           GHC.Stats              (RTSStats (..), getRTSStats,
+                                         getRTSStatsEnabled)
 #if MIN_VERSION_base(4,15,0)
 import           GHC.Exts               (SPEC (..))
 #else
 import           GHC.Exts               (SpecConstrAnnotation (..))
-#endif
-
-#if defined(mingw32_HOST_OS)
-import           Control.Exception      (bracket)
-import           Data.Word              (Word32)
 #endif
 
 -- deepseq
