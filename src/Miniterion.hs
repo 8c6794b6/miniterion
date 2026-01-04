@@ -89,7 +89,6 @@ import           Data.Foldable          (find, foldlM)
 import           Data.Int               (Int64)
 import           Data.List              (intercalate, isPrefixOf, nub, sort,
                                          stripPrefix, tails, unfoldr)
-import           Data.Maybe             (fromMaybe)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
 import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
@@ -593,9 +592,15 @@ getMEnv = Miniterion pure
 
 data Result
   = Done -- ^ Successfully finished running the benchmark.
-  | TooSlow String -- ^ Too slow compared to given baseline.
-  | TooFast String -- ^ Too fast compared to given baseline.
+  | Compared PassFail Change -- ^ Compared against baseline.
   | TimedOut String -- ^ Timed out.
+
+data PassFail = Pass | Fail
+
+data Change
+  = Negligible -- ^ No outstanding change.
+  | Slower String !Int64 -- ^ Slower than the baseline.
+  | Faster String !Int64 -- ^ Faster than the baseline.
 
 summariseResults :: [Result] -> IO ()
 summariseResults rs = do
@@ -603,8 +608,9 @@ summariseResults rs = do
       z :: (Int, Int)
       z = (0, 0)
       f (!done, !fl) = \case
-        Done -> (done + 1, fl)
-        _    -> (done + 1, fl + 1)
+        Done            -> (done + 1, fl)
+        Compared Pass _ -> (done + 1, fl)
+        _               -> (done + 1, fl + 1)
       bs | 1 < num_result = "benchmarks"
          | otherwise = "benchmark" :: String
       pr (name, why) = putStrLn ("  - " ++ name ++ " (" ++ why ++ ")")
@@ -614,22 +620,13 @@ summariseResults rs = do
     exitFailure
 {-# INLINABLE summariseResults #-}
 
-isTooFast, isTooSlow :: Result -> Bool
-
-isTooFast TooFast {} = True
-isTooFast _          = False
-{-# INLINE isTooFast #-}
-
-isTooSlow TooSlow {} = True
-isTooSlow _          = False
-{-# INLINE isTooSlow #-}
-
 failedNameAndReason :: Result -> Maybe (String, String)
 failedNameAndReason = \case
-  TooSlow name  -> Just (name, "too slow")
-  TooFast name  -> Just (name, "too fast")
-  TimedOut name -> Just (name, "timed out")
-  _             -> Nothing
+  TimedOut name                 -> Just (name, "timed out")
+  Compared Fail (Slower name _) -> Just (name, "too slow")
+  Compared Fail (Faster name _) -> Just (name, "too fast")
+  _                             -> Nothing
+
 {-# INLINE failedNameAndReason #-}
 
 
@@ -668,24 +665,15 @@ runBenchmarkWith !run !menv b = fst <$> runMiniterion (go [] 0 b) menv
 
 runBenchmarkable :: Int -> String -> Benchmarkable -> Miniterion Result
 runBenchmarkable idx fullname b = do
-  menv@MEnv{meConfig=Config{..}, ..} <- getMEnv
+  menv@MEnv{meConfig=cfg@Config{..}, ..} <- getMEnv
   putBenchname fullname
   debug "\n"
   liftIO $ hFlush stdout
   mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
-  let (result, mb_cmp) = case mb_sum of
-        Nothing -> (TimedOut fullname, Nothing)
-        Just (Summary {smEstimate=est}) ->
-          case compareVsBaseline meBaseline fullname est of
-            Nothing -> (Done, Nothing)
-            just_cmp@(Just cmp) ->
-              let is_acceptable
-                    | 1 + cfgFailIfSlower <= cmp = TooSlow fullname
-                    | cmp <= 1 - cfgFailIfFaster = TooFast fullname
-                    | otherwise                  = Done
-              in  (is_acceptable, just_cmp)
-      summary = fromMaybe emptySummary mb_sum
-  info (formatResult result summary mb_cmp)
+  let (result, summary) = case mb_sum of
+        Nothing -> (TimedOut fullname, emptySummary)
+        Just s  -> (compareVsBaseline meBaseline cfg fullname (smEstimate s), s)
+  info (formatSummary result summary)
   liftIO $ do
     mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
     mapM_ (putJSONObject idx fullname cfgInterval summary) meJsonHandle
@@ -702,7 +690,7 @@ iterBenchmarkable n _idx fullname b = do
     Just () -> info "\n" >> pure Done
     _ -> do
       let result = TimedOut fullname
-      info (formatResult result emptySummary Nothing)
+      info (formatSummary result emptySummary)
       pure result
 
 putBenchname :: String -> Miniterion ()
@@ -766,12 +754,12 @@ isVerbose e = 1 < cfgVerbosity (meConfig e)
 -- Formatting
 -- ------------------------------------------------------------------------
 
-formatResult :: Result -> Summary -> Maybe Double -> Doc
-formatResult (TimedOut _) _ _ =
+formatSummary :: Result -> Summary -> Doc
+formatSummary (TimedOut _) _ =
   boldRed "FAIL" <> "\n" <>
   yellow "Timed out while running this benchmark\n\n"
-formatResult res ~(Summary{smEstimate=Estimate m _, ..}) mb_cmp =
-  formatSlowDown res mb_cmp <> "\n" <>
+formatSummary res (Summary{smEstimate=Estimate m _, ..}) =
+  formatChange res <> "\n" <>
   --
   white "time                 " <> formatRanged smOLS <> "\n" <>
         "                     " <> formatR2 smR2 <> "\n" <>
@@ -782,19 +770,18 @@ formatResult res ~(Summary{smEstimate=Estimate m _, ..}) mb_cmp =
   formatOutlierVariance smOutlierVar <>
   formatGC m <> "\n\n"
 
-formatSlowDown :: Result -> Maybe Double -> Doc
-formatSlowDown res mb_cmp = failed_or_blank <> maybe "" slow_down mb_cmp
+formatChange :: Result -> Doc
+formatChange = \case
+  Compared pf change -> fmt pf change
+  _                  -> ""
   where
-    failed_or_blank
-      | isTooFast res || isTooSlow res = boldRed "FAIL"
-      | otherwise = ""
-    slow_down cmp = case r `compare` 0 of
-      LT -> warn_if isTooFast $ printf " (%2i%% less than baseline)" (-r)
-      EQ -> white " (same as baseline)"
-      GT -> warn_if isTooSlow $ printf " (%2i%% more than baseline)" r
-      where
-        r = truncate ((cmp - 1) * 100) :: Int64
-        warn_if test = (if test res then yellow else white) . stringToDoc
+    fmt pf = \case
+      Negligible -> white " (same as baseline)"
+      Faster _ r -> warn_if pf (printf " (%2i%% less than baseline)" r)
+      Slower _ r -> warn_if pf (printf " (%2i%% more than baseline)" r)
+    warn_if pf =
+      (case pf of Fail -> (boldRed "FAIL" <>) . yellow; Pass -> white) .
+      stringToDoc
 
 formatRanged :: Ranged -> Doc
 formatRanged (Ranged lo mid hi) =
@@ -1129,16 +1116,24 @@ joinQuotedFields (x : xs)
   where
     areQuotesBalanced = even . length . filter (== '"')
 
-compareVsBaseline :: Baseline -> String -> Estimate -> Maybe Double
-compareVsBaseline []       _     _                 = Nothing
-compareVsBaseline baseline name (Estimate m stdev) = fmap comp mb_old
+compareVsBaseline :: Baseline -> Config -> String -> Estimate -> Result
+compareVsBaseline [] _ _ _ = Done
+compareVsBaseline baseline Config{..} name (Estimate m stdev) = comp mb_old
   where
-    comp (old_time, old_sigma_x_2) =
-      if abs (time - old_time) < max (2 * picoToSecsW stdev) old_sigma_x_2
-        then 1
-        else time / old_time
-
-    time = picoToSecsW (measTime m)
+    comp Nothing = Done
+    comp (Just (old_time, old_sigma_x_2))
+      | negligible  = Compared Pass Negligible
+      | percent < 0 = Compared pf (Faster name (-percent))
+      | otherwise   = Compared pf (Slower name percent)
+      where
+        negligible =
+          abs (time - old_time) < max (2 * picoToSecsW stdev) old_sigma_x_2
+        percent = truncate ((ratio - 1) * 100)
+        pf | 1 + cfgFailIfSlower <= ratio = Fail
+           | ratio <= 1 - cfgFailIfFaster = Fail
+           | otherwise                    = Pass
+        ratio = time / old_time
+        time = picoToSecsW (measTime m)
 
     mb_old :: Maybe (Double, Double)
     mb_old = do
