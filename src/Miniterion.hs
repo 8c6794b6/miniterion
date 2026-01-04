@@ -770,52 +770,47 @@ formatResult :: Result -> Summary -> Maybe Double -> Doc
 formatResult (TimedOut _) _ _ =
   boldRed "FAIL" <> "\n" <>
   yellow "Timed out while running this benchmark\n\n"
-formatResult res summary mb_cmp =
-  fail_or_blank <> "\n" <>
+formatResult res ~(Summary{smEstimate=Estimate m _, ..}) mb_cmp =
+  formatSlowDown res mb_cmp <> "\n" <>
   --
-  white "time                 " <> showPicos5 (irMid smOLS)   <> "   " <>
-  show_minmax (irLo smOLS) (irHi smOLS) <>
-  maybe "" (formatSlowDown res) mb_cmp <> "\n" <>
-  --
-        "                     " <> rsq_str id (irMid smR2) <> "   " <>
-  show_minmax_rsq <> "\n" <>
-  --
-  white "mean                 " <> showPicos5 (irMid smMean) <> "   " <>
-  show_minmax (irLo smMean) (irHi smMean) <> "\n" <>
-  --
-  white "std dev              " <> showPicos5 (2 * irMid smStdev) <> "   " <>
-  show_minmax (2 * irLo smStdev) (2 * irHi smStdev) <>
+  white "time                 " <> formatRanged smOLS <> "\n" <>
+        "                     " <> formatR2 smR2 <> "\n" <>
+  white "mean                 " <> formatRanged smMean <> "\n" <>
+  white "std dev              " <> formatRanged (mapRanged (* 2) smStdev) <>
   --
   formatOutliers smOutliers <>
-  --
   formatOutlierVariance smOutlierVar <>
-  --
   formatGC m <> "\n\n"
+
+formatSlowDown :: Result -> Maybe Double -> Doc
+formatSlowDown res mb_cmp = failed_or_blank <> maybe "" slow_down mb_cmp
   where
-    Summary {smEstimate=Estimate m _, ..} = summary
-    fail_or_blank
+    failed_or_blank
       | isTooFast res || isTooSlow res = boldRed "FAIL"
       | otherwise = ""
-    show_minmax lo hi =
-      white ("(" <> showPicos5 lo <> " .. " <> showPicos5 hi <> ")")
-    rsq_str on_other val = color (stringToDoc (printf "%.3f R²" val))
+    slow_down cmp = case r `compare` 0 of
+      LT -> warn_if isTooFast $ printf " (%2i%% less than baseline)" (-r)
+      EQ -> white " (same as baseline)"
+      GT -> warn_if isTooSlow $ printf " (%2i%% more than baseline)" r
       where
-        color | val < 0.90 = boldRed
-              | val < 0.99 = yellow
-              | otherwise = on_other
-    show_minmax_rsq =
-      white "(" <> rsq_str white (irLo smR2) <> white " .. " <>
-      rsq_str white (irHi smR2) <> white ")"
+        r = truncate ((cmp - 1) * 100) :: Int64
+        warn_if test = (if test res then yellow else white) . stringToDoc
 
-formatSlowDown :: Result -> Double -> Doc
-formatSlowDown result ratio = case percents `compare` 0 of
-  LT -> in_yellow isTooFast $ printf " (%2i%% less than baseline)" (-percents)
-  EQ -> white                         "       (same as baseline)"
-  GT -> in_yellow isTooSlow $ printf " (%2i%% more than baseline)" percents
+formatRanged :: Ranged -> Doc
+formatRanged (Ranged lo mid hi) =
+  showPicos5 mid <> "   " <>
+  white ("(" <> showPicos5 lo <> " .. " <> showPicos5 hi <> ")")
+
+formatR2 :: R2 -> Doc
+formatR2 (Ranged lo mid hi) =
+  fmt id mid <> "   " <>
+  white "(" <> fmt white lo <> white " .. " <> fmt white hi <> white ")"
   where
-    percents :: Int64
-    percents = truncate ((ratio - 1) * 100)
-    in_yellow test = (if test result then yellow else white) . fromString
+    fmt on_other !val = color (stringToDoc (printf "%.3f R²" val))
+      where
+        !color | val < 0.90 = boldRed
+               | val < 0.99 = yellow
+               | otherwise  = on_other
 
 formatOutlierVariance :: OutlierVariance -> Doc
 formatOutlierVariance (OutlierVariance !oe !_ frac) = Doc $ \ !menv ->
@@ -830,8 +825,9 @@ formatOutlierVariance (OutlierVariance !oe !_ frac) = Doc $ \ !menv ->
     Severe                      -> show_oe "severely inflated"
     _                           -> ""
 
+-- Only shown when verbose.
 formatOutliers :: Outliers -> Doc
-formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
+formatOutliers ~(Outliers seen ls lm hm hs) = Doc $ \ !menv ->
   if isVerbose menv && 0 < os then
     docToString menv msg
   else
@@ -856,8 +852,9 @@ formatOutliers (Outliers seen ls lm hm hs) = Doc $ \ !menv ->
       else
         ""
 
+-- Only shown when collecting RTS stats.
 formatGC :: Measurement -> Doc
-formatGC (Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
+formatGC ~(Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
   Doc $ \ !e ->
   if meHasRTSStats e then
     let sb !b = fromString $! showBytes b
@@ -881,17 +878,19 @@ formatMeasurement :: Measurement -> Doc
 formatMeasurement (Measurement n t _ a c m) =
   showDoc n <>
   (if n == 1 then " iteration gives " else " iteragions give ") <>
-  showPicos5 (t `quot` n) <> fromString (printf " (%d/%d)" t n) <>
+  showPicos5 t' <> fromString (printf " (%d/%d)" t n) <>
   Doc (\ !menv ->
          if meHasRTSStats menv then
            printf " alloc: %d copied: %d max: %d" a c m
          else
            "") <>
   "\n"
+  where
+    !t' = word64ToDouble (t `quot` n)
 
 -- | Show picoseconds, fitting number in 5 characters.
-showPicos5 :: Word64 -> Doc
-showPicos5 i
+showPicos5 :: Double -> Doc
+showPicos5 t
   | t < 10     = f $ printf "%.3f ps" t
   | t < 100    = f $ printf "%.2f ps" t
   | t < 1000   = f $ printf "%.1f ps" t
@@ -909,7 +908,6 @@ showPicos5 i
   | t < 999e12 = f $ printf "%.1f s " (t / 1e12)
   | otherwise  = f $ printf "%4.1f s" (t / 1e12)
   where
-    t = word64ToDouble i
     f = fromString
     print_mu fmt = Doc (printf fmt (t / 1e6) . mu)
 
@@ -1103,10 +1101,13 @@ csvSummary has_gc (Summary {smEstimate=Estimate m _, ..})
   | otherwise = time
   where
     time =
-      show (measTime m) ++ "," ++
-      show (irLo smMean) ++ "," ++ show (irHi smMean) ++ "," ++
-      show (2 * irMid smStdev) ++ "," ++
-      show (2 * irLo smStdev) ++ "," ++ show (2 * irHi smStdev)
+      show (irMid mean) ++ "," ++
+      show (irLo mean) ++ "," ++ show (irHi mean) ++ "," ++
+      show (2 * irMid stddev) ++ "," ++
+      show (2 * irLo stddev) ++ "," ++ show (2 * irHi stddev)
+      where
+        mean = mapRanged picoToSecsD smMean
+        stddev = mapRanged picoToSecsD smStdev
     gc =
       show (measAllocs m) ++ "," ++ show (measCopied m) ++ "," ++
       show (measMaxMem m)
@@ -1133,13 +1134,13 @@ compareVsBaseline []       _     _                 = Nothing
 compareVsBaseline baseline name (Estimate m stdev) = fmap comp mb_old
   where
     comp (old_time, old_sigma_x_2) =
-      if abs (time - old_time) < max (2 * word64ToInt64 stdev) old_sigma_x_2
+      if abs (time - old_time) < max (2 * picoToSecsW stdev) old_sigma_x_2
         then 1
-        else int64ToDouble time / int64ToDouble old_time
+        else time / old_time
 
-    time = word64ToInt64 $ measTime m
+    time = picoToSecsW (measTime m)
 
-    mb_old :: Maybe (Int64, Int64)
+    mb_old :: Maybe (Double, Double)
     mb_old = do
       let prefix = encodeCsv name ++ ","
           (_, breaked) = break (isPrefixOf prefix) baseline
@@ -1171,8 +1172,8 @@ encodeCsv xs
 
 -- The JSON report made by Miniterion differs from the one made by
 -- Criterion. Some of the values are missing (e.g., 'y' in regCoeffs,
--- Measurement fields). Hope that the use of the same names will help
--- reusing the JSON parser between Miniterion and Criterion.
+-- GC related Measurement fields). Hope that the use of the same names
+-- will help reusing the JSON parser between Miniterion and Criterion.
 
 withJSONSettings :: (MEnv -> IO a) -> MEnv -> IO a
 withJSONSettings !act menv@MEnv{meConfig=Config{..}} =
@@ -1216,10 +1217,10 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
     "}"
   where
     analysis =
-      "{\"anMean\":" ++ est (fmap picoToSecs smMean) ++
+      "{\"anMean\":" ++ est (mapRanged picoToSecsD smMean) ++
       ",\"anOutlierVar\":" ++ variance ++
       ",\"anRegress\":[" ++ reg ++ "]" ++
-      ",\"anStdDev\":" ++ est (fmap picoToSecs smStdev) ++
+      ",\"anStdDev\":" ++ est (mapRanged picoToSecsD smStdev) ++
       "}"
       where
         est (Ranged lo mid hi) =
@@ -1242,7 +1243,7 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
           "}"
           where
             coeffs =
-              "{\"iters\":" ++ est (fmap picoToSecs smOLS) ++ "}"
+              "{\"iters\":" ++ est (mapRanged picoToSecsD smOLS) ++ "}"
     kdes =
       "[{\"kdePDF\":" ++ show (kdPDF smKDEs) ++
       ",\"kdeType\":\"time\"" ++
@@ -1259,9 +1260,9 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
       where
         meas_to_arr (Measurement n t p a c m) =
           -- time
-          "[" ++ show (picoToSecs t) ++ "," ++
+          "[" ++ show (picoToSecsW t) ++ "," ++
           -- cputTime, cycles, iters
-          show (picoToSecs p) ++ ",0," ++ show n ++ "," ++
+          show (picoToSecsW p) ++ ",0," ++ show n ++ "," ++
           -- allocated
           (if a == 0 then "null" else show a) ++ "," ++
           -- peakMbAllocated
@@ -1562,9 +1563,13 @@ getCpuPicoSecs :: IO Word64
 getCpuPicoSecs = fmap fromIntegral getCPUTime
 {-# INLINE getCpuPicoSecs #-}
 
-picoToSecs :: Word64 -> Double
-picoToSecs pico = word64ToDouble pico / 1e12
-{-# INLINE picoToSecs #-}
+picoToSecsW :: Word64 -> Double
+picoToSecsW = picoToSecsD . word64ToDouble
+{-# INLINE picoToSecsW #-}
+
+picoToSecsD :: Double -> Double
+picoToSecsD pico = pico / 1e12
+{-# INLINE picoToSecsD #-}
 
 
 -- ------------------------------------------------------------------------
@@ -1618,10 +1623,10 @@ data Estimate = Estimate
   , estStdev :: !Word64 -- ^ stdev in picoseconds
   }
 
-type OLS = Ranged Word64
-type R2 = Ranged Double
-type Mean = Ranged Word64
-type Stdev = Ranged Word64
+type OLS = Ranged
+type R2 = Ranged
+type Mean = Ranged
+type Stdev = Ranged
 
 -- According to the UNPACK section of the ghc users guide, the two
 -- lists fields in Acc are Sum types, thus -funbox-strict-fields does
@@ -1819,7 +1824,7 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
          (is_stdev_in_target_range ||
           is_timeout_soon)
         then do
-          let dur = end_time - start_time
+          let dur = word64ToDouble (end_time - start_time)
           verbose' menv $
             white "\nmeasurement took " <> showPicos5 dur <> "\n" <>
             formatBootstrap cfgResamples (acValidCount acc') (acCount acc')
@@ -1829,10 +1834,10 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement {measTime=t}) =
   Summary { smEstimate = Estimate m 0
-          , smOLS = toRanged t
+          , smOLS = toRanged (word64ToDouble t)
           , smR2 = toRanged 1
           , smStdev = toRanged 0
-          , smMean =  toRanged t
+          , smMean =  toRanged (word64ToDouble t)
           , smKDEs = KDE [] []
           , smMeasured = []
           , smOutlierVar = OutlierVariance Unaffected "no" 0
@@ -1870,7 +1875,7 @@ threshold = 30000000000
 
 summarize :: Config -> Seed -> Acc -> Estimate -> Summary
 summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
-  { smEstimate = Estimate meas (irMid stdev)
+  { smEstimate = est
   , smOLS = ols
   , smR2 = r2
   , smStdev = stdev
@@ -1881,13 +1886,17 @@ summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
   , smMeasured = measured
   }
   where
-    meas = scale measN
+    est = Estimate (scale measN) (ceiling (irMid stdev))
+    (ols, r2) = bootstrap' (regress nc) acCount xys
+    (stdev, mean) = bootstrap' (meanAndStdDev nvc) acValidCount times
+    (!ov, outliers, kde) = kdeAndOutliers (irMid stdev) nvc times
     measured = reverse acMeasurements
+
     !nc = word64ToDouble acCount
     !nvc = word64ToDouble acValidCount
 
     bootstrap' :: Ord a => ([a] -> (Double, Double)) -> Word64 -> [a]
-               -> (Ranged Double, Ranged Double)
+               -> (Ranged, Ranged)
     bootstrap' = bootstrap2 seed cfgResamples cfgInterval
 
     -- Filtering out measurements with too short total duration for
@@ -1900,15 +1909,6 @@ summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
               t = word64ToDouble measTime
               as' = if threshold < measTime then t/i : as else as
           in  (as', (i, t) : bs)
-
-    (mean_d, stdev_d) = bootstrap' (meanAndStdDev nvc) acValidCount times
-    mean = fmap ceiling mean_d
-    stdev = fmap ceiling stdev_d
-
-    (ols_d, r2) = bootstrap' (regress nc) acCount xys
-    ols = fmap ceiling ols_d
-
-    (kde, outliers, !ov) = kdeAndOutliers (irMid stdev_d) nvc times
 {-# INLINE summarize #-}
 
 scale :: Measurement -> Measurement
@@ -1925,15 +1925,20 @@ scale (Measurement n t p a c m) = Measurement n t' p' a' c' m
 -- Ordered values
 -- ------------------------------------------------------------------------
 
--- | A value in a range.
-data Ranged a = Ranged {irLo :: !a, irMid :: !a, irHi :: !a}
+-- | A range of 'Double' values.
+data Ranged = Ranged
+  { irLo  :: !Double
+  , irMid :: !Double
+  , irHi  :: !Double
+  }
 
-instance Functor Ranged where
-  fmap f (Ranged l m h) = Ranged (f l) (f m) (f h)
-  {-# INLINE fmap #-}
+-- | Apply given function to the values in Ranged.
+mapRanged :: (Double -> Double) -> Ranged -> Ranged
+mapRanged f (Ranged l m h) = Ranged (f l) (f m) (f h)
+{-# INLINE mapRanged #-}
 
 -- | Ranged value with identical lo, high, and the body values.
-toRanged :: a -> Ranged a
+toRanged :: Double -> Ranged
 toRanged x = Ranged x x x
 {-# INLINE toRanged #-}
 
@@ -1942,35 +1947,32 @@ toRanged x = Ranged x x x
 -- Bootstrap
 -- ------------------------------------------------------------------------
 
-bootstrap2 :: (Ord b, Ord c)
-           => Seed           -- ^ Random seed
-           -> Word64         -- ^ Number of resamples
-           -> Double         -- ^ Confidence interval
-           -> ([a] -> (b,c)) -- ^ Function applied to each resample
-           -> Word64         -- ^ Length of the original list
-           -> [a]            -- ^ The original list
-           -> (Ranged b, Ranged c)
+bootstrap2 :: Seed                      -- ^ Random seed
+           -> Word64                    -- ^ Number of resamples
+           -> Double                    -- ^ Confidence interval
+           -> ([a] -> (Double, Double)) -- ^ Function applied to each resample
+           -> Word64                    -- ^ Length of the original list
+           -> [a]                       -- ^ The original list
+           -> (Ranged, Ranged)
 bootstrap2 !seed !nresamp !ci !f !norig orig = (br, cr)
   where
-    !br = confInterval b ci nresampd bs
-    !cr = confInterval c ci nresampd cs
+    !br = confInterval b ci nresamp bs
+    !cr = confInterval c ci nresamp cs
     (!b, !c) = f orig
     (!bs, !cs) = unzip (resample seed nresamp f norig orig)
-    !nresampd = word64ToDouble nresamp
 {-# INLINE bootstrap2 #-}
 
-confInterval :: Ord a
-             => a      -- ^ The point value
-             -> Double -- ^ Interval
-             -> Double -- ^ Length of the list
-             -> [a]    -- ^ The list
-             -> Ranged a
+confInterval :: Double   -- ^ The point value
+             -> Double   -- ^ Interval
+             -> Word64   -- ^ Length of the list
+             -> [Double] -- ^ The list
+             -> Ranged
 confInterval !mid !i !n xs = Ranged lo mid hi
   where
-    !lo = xs' !! truncate (n' * half_of_i)
-    !hi = xs' !! ceiling (n' * (1 - half_of_i))
-    half_of_i = (1-i) / 2
-    n' = n - 1
+    !lo = xs' !! truncate (n' * i')
+    !hi = xs' !! ceiling (n' * (1 - i'))
+    !i' = (1 - i) / 2
+    !n' = word64ToDouble (n - 1)
     xs' = sort xs
 {-# INLINE confInterval #-}
 
@@ -2000,9 +2002,9 @@ resample !seed !nresamp !f !norig orig = go nresamp [] idxs0
 meanAndStdDev :: Double -- ^ Length of the samples
               -> [Double] -- ^ The samples
               -> (Double, Double) -- ^ (mean, standard deviation)
-meanAndStdDev !n xs = (mean, stddev)
+meanAndStdDev !n xs = (stddev, mean)
   where
-    mean = sum xs / n
+    !mean = sum xs / n
     stddev = sqrt (sum [square (x - mean) | x <- xs] / n)
 
 -- | Simple linear regression with ordinary least square.
@@ -2036,8 +2038,8 @@ regress n xs_and_ys = (a, r2)
 kdeAndOutliers :: Double   -- ^ Sample standard deviation
                -> Double   -- ^ Length of the list
                -> [Double] -- ^ The list containing values
-               -> (KDE, Outliers, OutlierVariance)
-kdeAndOutliers !s !n xs_picos = (kde, outliers, ov)
+               -> (OutlierVariance, Outliers, KDE)
+kdeAndOutliers !s !n xs_picos = (ov, outliers, kde)
   where
     kde = KDE {kdValues=values, kdPDF=density}
 
@@ -2091,7 +2093,7 @@ kdeAndOutliers !s !n xs_picos = (kde, outliers, ov)
     iqr = q3 - q1
     q3 = xs !! ceiling (n * 0.75)
     q1 = xs !! truncate (n * 0.25)
-    xs = sort [x / 1e12 | x <- xs_picos]
+    xs = sort [picoToSecsD x | x <- xs_picos]
 {-# INLINABLE kdeAndOutliers #-}
 
 addOutliers :: Outliers -> Outliers -> Outliers
@@ -2158,17 +2160,9 @@ splitmix64 s = (r3, r0)
 -- Converting numbers
 -- ------------------------------------------------------------------------
 
-int64ToDouble :: Int64 -> Double
-int64ToDouble = fromIntegral
-{-# INLINE int64ToDouble #-}
-
 word64ToInt :: Word64 -> Int
 word64ToInt = fromIntegral
 {-# INLINE word64ToInt #-}
-
-word64ToInt64 :: Word64 -> Int64
-word64ToInt64 = fromIntegral
-{-# INLINE word64ToInt64 #-}
 
 word64ToDouble :: Word64 -> Double
 word64ToDouble = fromIntegral
