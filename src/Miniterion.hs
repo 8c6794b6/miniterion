@@ -776,11 +776,11 @@ formatChange = \case
   _                  -> ""
   where
     fmt pf = \case
-      Negligible -> white " (same as baseline)"
-      Faster _ r -> warn_if pf (printf " (%2i%% less than baseline)" r)
-      Slower _ r -> warn_if pf (printf " (%2i%% more than baseline)" r)
+      Negligible -> white "(same as baseline)"
+      Faster _ r -> warn_if pf (printf "(%2i%% less than baseline)" r)
+      Slower _ r -> warn_if pf (printf "(%2i%% more than baseline)" r)
     warn_if pf =
-      (case pf of Fail -> (boldRed "FAIL" <>) . yellow; Pass -> white) .
+      (case pf of Fail -> (boldRed "FAIL " <>) . yellow; Pass -> white) .
       stringToDoc
 
 formatRanged :: Ranged -> Doc
