@@ -800,7 +800,7 @@ formatR2 (Ranged lo mid hi) =
                | otherwise  = on_other
 
 formatOutlierVariance :: OutlierVariance -> Doc
-formatOutlierVariance (OutlierVariance !oe !_ frac) = Doc $ \ !menv ->
+formatOutlierVariance (OutlierVariance !oe _ frac) = Doc $ \ !menv ->
   let show_oe effect =
         white "\nvariance introduced by outliers: " <>
         stringToDoc (printf "%2d%% " (round (frac * 100) :: Int)) <>
