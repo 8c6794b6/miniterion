@@ -851,8 +851,9 @@ formatGC ~(Measurement {measAllocs=a, measCopied=c, measMaxMem=p}) =
   else
     ""
 
-formatBootstrap :: Word64 -> Word64 -> Word64 -> Doc
-formatBootstrap nresample nvalid nmeas =
+formatBootstrap :: Word64 -> Word64 -> Word64 -> Word64 -> Doc
+formatBootstrap dur nresample nvalid nmeas =
+  white "\nmeasurement took " <> showPicos5 (word64ToDouble dur) <> "\n" <>
   white "analysing with " <> showDoc nresample <> white " resamples\n" <>
   white "bootstrapping with " <> showDoc nvalid <> white " of " <>
   showDoc nmeas <> white " samples (" <> showDoc percent <> "%)"
@@ -1819,10 +1820,9 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
          (is_stdev_in_target_range ||
           is_timeout_soon)
         then do
-          let dur = word64ToDouble (end_time - start_time)
+          let dur = end_time - start_time
           verbose' menv $
-            white "\nmeasurement took " <> showPicos5 dur <> "\n" <>
-            formatBootstrap cfgResamples (acValidCount acc') (acCount acc')
+            formatBootstrap dur cfgResamples (acValidCount acc') (acCount acc')
           pure $ summarize cfg start_time acc' est
         else go ns start_time m2 acc'
 
