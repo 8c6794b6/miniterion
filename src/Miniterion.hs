@@ -1860,7 +1860,7 @@ warnOnTooLongBenchmark tout t_start t_now =
 data Acc = Acc
   { acCount        :: !Word64 -- ^ Number of measurements
   , acValidCount   :: !Word64 -- ^ Number of measurements longer than threshold
-  , acMeasurements :: [Measurement]
+  , acMeasurements :: ![Measurement]
   }
 
 -- | 30 milliseconds in picosecond.
