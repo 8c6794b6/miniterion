@@ -788,7 +788,7 @@ formatRanged (Ranged lo mid hi) =
   showPicos5 mid <> "   " <>
   white ("(" <> showPicos5 lo <> " .. " <> showPicos5 hi <> ")")
 
-formatR2 :: R2 -> Doc
+formatR2 :: Ranged -> Doc
 formatR2 (Ranged lo mid hi) =
   fmt id mid <> "   " <>
   white "(" <> fmt white lo <> white " .. " <> fmt white hi <> white ")"
@@ -1619,48 +1619,12 @@ data Estimate = Estimate
   , estStdev :: !Word64 -- ^ stdev in picoseconds
   }
 
-type OLS = Ranged
-type R2 = Ranged
-type Mean = Ranged
-type Stdev = Ranged
-
--- According to the UNPACK section of the ghc users guide, the two
--- lists fields in Acc are Sum types, thus -funbox-strict-fields does
--- not unpack them. Explicitly telling GHC to unpack the list fields,
--- since the fields does not perform expensive computations.
-
-data KDE = KDE
-  { kdValues :: {-# UNPACK #-} ![Double]
-  , kdPDF    :: {-# UNPACK #-} ![Double]
-  }
-
-data OutlierEffect
-  = Unaffected
-  | Slight
-  | Moderate
-  | Severe
-  deriving (Show)
-
-data OutlierVariance = OutlierVariance
-  { ovEffect   :: OutlierEffect
-  , ovDesc     :: String
-  , ovFraction :: !Double
-  }
-
-data Outliers = Outliers
-  { otSamplesSeen :: !Word64
-  , otLowSevere   :: !Word64
-  , otLowMild     :: !Word64
-  , otHighMild    :: !Word64
-  , otHighSevere  :: !Word64
-  }
-
 data Summary = Summary
   { smEstimate   :: !Estimate
-  , smOLS        :: !OLS
-  , smR2         :: !R2
-  , smStdev      :: !Stdev
-  , smMean       :: !Mean
+  , smOLS        :: !Ranged
+  , smR2         :: !Ranged
+  , smStdev      :: !Ranged
+  , smMean       :: !Ranged
   , smOutlierVar :: !OutlierVariance
   , smOutliers   :: Outliers
   , smKDEs       :: KDE
@@ -1995,6 +1959,41 @@ resample !seed !nresamp !f !norig orig = go nresamp [] idxs0
 -- Analysis
 -- ------------------------------------------------------------------------
 
+data KDE = KDE
+  { kdValues :: ![Double]
+  , kdPDF    :: ![Double]
+  }
+
+data OutlierEffect
+  = Unaffected
+  | Slight
+  | Moderate
+  | Severe
+  deriving (Show)
+
+data OutlierVariance = OutlierVariance
+  { ovEffect   :: OutlierEffect
+  , ovDesc     :: String
+  , ovFraction :: !Double
+  }
+
+data Outliers = Outliers
+  { otSamplesSeen :: !Word64
+  , otLowSevere   :: !Word64
+  , otLowMild     :: !Word64
+  , otHighMild    :: !Word64
+  , otHighSevere  :: !Word64
+  }
+
+-- | Interquartile range in seconds.
+data IQR = IQR
+  { iq1           :: !Double   -- ^ Q1
+  , iq3           :: !Double   -- ^ Q3
+  , iqR           :: !Double   -- ^ Q3 - Q1
+  , iqPseudosigma :: !Double   -- ^ (Q3 - Q1) / 1.349
+  , iqSorted      :: ![Double] -- ^ Sorted samples
+  }
+
 -- | Compute mean and standard deviation.
 meanAndStdDev :: Double -- ^ Length of the samples
               -> [Double] -- ^ The samples
@@ -2030,15 +2029,6 @@ regress n xs_and_ys = (a, r2)
     !ssr = sum [square (y - a * x) | (x,y) <- xs_and_ys]
     !r2 = 1 - (ssr / sst)
 {-# INLINABLE regress #-}
-
--- | Interquartile range in seconds.
-data IQR = IQR
-  { iq1           :: !Double   -- ^ Q1
-  , iq3           :: !Double   -- ^ Q3
-  , iqR           :: !Double   -- ^ Q3 - Q1
-  , iqPseudosigma :: !Double   -- ^ (Q3 - Q1) / 1.349
-  , iqSorted      :: ![Double] -- ^ Sorted samples
-  }
 
 computeIQR :: Double   -- ^ Number of samples.
            -> [Double] -- ^ The samples.
