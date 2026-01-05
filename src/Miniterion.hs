@@ -1884,15 +1884,17 @@ summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
     est = Estimate (scale measN) (ceiling (irMid stdev))
     (ols, r2) = bootstrap' (regress nc) acCount xys
     (stdev, mean) = bootstrap' (meanAndStdDev nvc) acValidCount times
-    (!ov, outliers, kde) = kdeAndOutliers (irMid stdev) nvc times
+    (!ov, outliers) = computeOutliers (irMid stdev) iqr
+    kde = computeKDE (irMid stdev) nvc iqr
     measured = reverse acMeasurements
-
-    !nc = word64ToDouble acCount
-    !nvc = word64ToDouble acValidCount
 
     bootstrap' :: Ord a => ([a] -> (Double, Double)) -> Word64 -> [a]
                -> (Ranged, Ranged)
     bootstrap' = bootstrap2 seed cfgResamples cfgInterval
+
+    !nc = word64ToDouble acCount
+    !nvc = word64ToDouble acValidCount
+    !iqr = computeIQR nvc times
 
     -- Filtering out measurements with too short total duration for
     -- `times', since those data are considered imprecise and
@@ -2029,35 +2031,34 @@ regress n xs_and_ys = (a, r2)
     !r2 = 1 - (ssr / sst)
 {-# INLINABLE regress #-}
 
--- | Compute kernel density estimation and outliers.
-kdeAndOutliers :: Double   -- ^ Sample standard deviation
-               -> Double   -- ^ Length of the list
-               -> [Double] -- ^ The list containing values
-               -> (OutlierVariance, Outliers, KDE)
-kdeAndOutliers !s !n xs_picos = (ov, outliers, kde)
+-- | Interquartile range in seconds.
+data IQR = IQR
+  { iq1           :: !Double   -- ^ Q1
+  , iq3           :: !Double   -- ^ Q3
+  , iqR           :: !Double   -- ^ Q3 - Q1
+  , iqPseudosigma :: !Double   -- ^ (Q3 - Q1) / 1.349
+  , iqSorted      :: ![Double] -- ^ Sorted samples
+  }
+
+computeIQR :: Double   -- ^ Number of samples.
+           -> [Double] -- ^ The samples.
+           -> IQR
+computeIQR !n xs = IQR q1 q3 r ps xs'
   where
-    kde = KDE {kdValues=values, kdPDF=density}
+    q1 = xs' !! truncate (n * 0.25)
+    q3 = xs' !! ceiling (n * 0.75)
+    r = q3 - q1
+    ps = r / 1.349
+    xs' = sort [picoToSecsD x | x <- xs]
+{-# INLINABLE computeIQR #-}
 
-    -- Dividing 120% of the range to 128 points.
-    values = enumFromThenTo lo' (lo'+delta) hi'
-      where
-        delta = (hi' - lo') / 127
-        lo' = lo - r/10
-        hi' = hi + r/10
-        r = hi - lo
-        (lo, hi) = case xs of
-          []   -> error "kdeAndOutliers: empty list"
-          hd:_ -> (hd, xs !! (truncate n - 1))
-
-    -- Using simple Gaussian kernel function and Silverman's rule of
-    -- thumb for bandwidth.
-    density = [sum [k ((x-xi)/h) | xi<-xs] / (n*h) | x<-values]
-      where
-        k u = exp (-(u*u/2)) / sqrt (2*pi)
-        !h = 0.9 * min s_in_seconds s'_in_seconds * (n ** (-0.2))
-
+computeOutliers :: Double -- ^ Standard deviation.
+                -> IQR    -- ^ Interquartile range.
+                -> (OutlierVariance, Outliers)
+computeOutliers !s IQR{..} = (ov, otls)
+  where
     -- See 'Criterion.Analysis.classifyOutliers'.
-    outliers = foldr f z xs
+    otls = foldr f z iqSorted
       where
         f t
           | t  <= ls  = addOutliers (Outliers 1 1 0 0 0)
@@ -2066,30 +2067,48 @@ kdeAndOutliers !s !n xs_picos = (ov, outliers, kde)
           | hm <= t   = addOutliers (Outliers 1 0 0 1 0)
           | otherwise = addOutliers (Outliers 1 0 0 0 0)
           where
-            !ls = q1 - (iqr * 3)
-            !lm = q1 - (iqr * 1.5)
-            !hm = q3 + (iqr * 1.5)
-            !hs = q3 + (iqr * 3)
+            !ls = iq1 - (iqR * 3)
+            !lm = iq1 - (iqR * 1.5)
+            !hm = iq3 + (iqR * 1.5)
+            !hs = iq3 + (iqR * 3)
         z = Outliers 0 0 0 0 0
 
-    -- Comparing sample standard deviation to pseudo standard
-    -- deviation calculated from IQR. See
-    -- 'Criterion.Analysis.outlierVariance'.
+    -- See 'Criterion.Analysis.outlierVariance'.
     ov = OutlierVariance effect desc frac
       where
         (effect, desc) | frac < 0.01 = (Unaffected, "no")
                        | frac < 0.1  = (Slight,     "a slight")
                        | frac < 0.5  = (Moderate,   "a moderate")
                        | otherwise   = (Severe,     "a severe")
-        frac = 1 - min 1 (s'_in_seconds / s_in_seconds)
+        frac = 1 - min 1 (iqPseudosigma / s_in_seconds)
+        s_in_seconds = s / 1e12
+{-# INLINABLE computeOutliers #-}
 
-    s_in_seconds = s / 1e12
-    s'_in_seconds = iqr / 1.349
-    iqr = q3 - q1
-    q3 = xs !! ceiling (n * 0.75)
-    q1 = xs !! truncate (n * 0.25)
-    xs = sort [picoToSecsD x | x <- xs_picos]
-{-# INLINABLE kdeAndOutliers #-}
+computeKDE :: Double -- ^ Standard deviation.
+           -> Double -- ^ Number of samples.
+           -> IQR    -- ^ Interquartile range.
+           -> KDE
+computeKDE !s !n IQR{..} = KDE values density
+  where
+    -- Dividing 120% of the range to 128 points.
+    values = enumFromThenTo lo' (lo'+delta) hi'
+      where
+        delta = (hi' - lo') / 127
+        lo' = lo - r/10
+        hi' = hi + r/10
+        r = hi - lo
+        (lo, hi) = case iqSorted of
+          []   -> error "computeKDE: empty list"
+          hd:_ -> (hd, iqSorted !! (truncate n - 1))
+
+    -- Using simple Gaussian kernel function and Silverman's rule of
+    -- thumb for bandwidth.
+    density = [sum [k ((x-xi)/h) | xi<-iqSorted] / (n*h) | x<-values]
+      where
+        k u = exp (-(u*u/2)) / sqrt (2*pi)
+        !h = 0.9 * min s_in_seconds iqPseudosigma * (n ** (-0.2))
+        s_in_seconds = s / 1e12
+{-# INLINABLE computeKDE #-}
 
 addOutliers :: Outliers -> Outliers -> Outliers
 addOutliers (Outliers n1 ls1 lm1 hm1 hs1) (Outliers n2 ls2 lm2 hm2 hs2) =
