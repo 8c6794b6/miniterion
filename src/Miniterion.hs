@@ -1128,13 +1128,13 @@ compareVsBaseline baseline Config{..} name (Estimate m stdev) = comp mb_old
       | otherwise   = Compared pf (Slower name percent)
       where
         negligible =
-          abs (time - old_time) < max (2 * picoToSecsW stdev) old_sigma_x_2
+          abs (time - old_time) < max (2 * picoToSecW stdev) old_sigma_x_2
         percent = truncate ((ratio - 1) * 100)
         pf | 1 + cfgFailIfSlower <= ratio = Fail
            | ratio <= 1 - cfgFailIfFaster = Fail
            | otherwise                    = Pass
         ratio = time / old_time
-        time = picoToSecsW (measTime m)
+        time = picoToSecW (measTime m)
 
     mb_old :: Maybe (Double, Double)
     mb_old = do
@@ -1213,10 +1213,10 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
     "}"
   where
     analysis =
-      "{\"anMean\":" ++ est (mapRanged picoToSecsD smMean) ++
+      "{\"anMean\":" ++ est (mapRanged picoToSecD smMean) ++
       ",\"anOutlierVar\":" ++ variance ++
       ",\"anRegress\":[" ++ reg ++ "]" ++
-      ",\"anStdDev\":" ++ est (mapRanged picoToSecsD smStdev) ++
+      ",\"anStdDev\":" ++ est (mapRanged picoToSecD smStdev) ++
       "}"
       where
         est (Ranged lo mid hi) =
@@ -1239,7 +1239,7 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
           "}"
           where
             coeffs =
-              "{\"iters\":" ++ est (mapRanged picoToSecsD smOLS) ++ "}"
+              "{\"iters\":" ++ est (mapRanged picoToSecD smOLS) ++ "}"
     kdes =
       "[{\"kdePDF\":" ++ show (kdPDF smKDEs) ++
       ",\"kdeType\":\"time\"" ++
@@ -1256,9 +1256,9 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
       where
         meas_to_arr (Measurement n t p a c m) =
           -- time
-          "[" ++ show (picoToSecsW t) ++ "," ++
+          "[" ++ show (picoToSecW t) ++ "," ++
           -- cputTime, cycles, iters
-          show (picoToSecsW p) ++ ",0," ++ show n ++ "," ++
+          show (picoToSecW p) ++ ",0," ++ show n ++ "," ++
           -- allocated
           (if a == 0 then "null" else show a) ++ "," ++
           -- peakMbAllocated
@@ -1559,13 +1559,13 @@ getCpuPicoSecs :: IO Word64
 getCpuPicoSecs = fmap fromIntegral getCPUTime
 {-# INLINE getCpuPicoSecs #-}
 
-picoToSecsW :: Word64 -> Double
-picoToSecsW = picoToSecsD . word64ToDouble
-{-# INLINE picoToSecsW #-}
+picoToSecW :: Word64 -> Double
+picoToSecW = picoToSecD . word64ToDouble
+{-# INLINE picoToSecW #-}
 
-picoToSecsD :: Double -> Double
-picoToSecsD pico = pico / 1e12
-{-# INLINE picoToSecsD #-}
+picoToSecD :: Double -> Double
+picoToSecD pico = pico / 1e12
+{-# INLINE picoToSecD #-}
 
 
 -- ------------------------------------------------------------------------
@@ -2039,7 +2039,7 @@ computeIQR !n xs = IQR q1 q3 r ps xs'
     q3 = xs' !! ceiling (n * 0.75)
     r = q3 - q1
     ps = r / 1.349
-    xs' = sort [picoToSecsD x | x <- xs]
+    xs' = sort [picoToSecD x | x <- xs]
 {-# INLINABLE computeIQR #-}
 
 computeOutliers :: Double -- ^ Standard deviation.
