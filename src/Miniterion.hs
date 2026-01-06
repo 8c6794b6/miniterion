@@ -2179,7 +2179,9 @@ word64ToDouble = fromIntegral
 
 -- criterion-measurement-0.2.1 uses NOINLINE pragma, gauge-0.2.5 and
 -- tasty-bench-0.3.4 use INLINE pragma for following wrapper
--- functions.  At the moment, this module is using NOINLINE.
+-- functions.  At the moment, this module is using NOINLINE. See
+-- 'Criterion.Measurement.Types.Internal' in 'criterion-measurement'
+-- package.
 
 #if !MIN_VERSION_base(4,15,0)
 data SPEC = SPEC
