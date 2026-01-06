@@ -1089,13 +1089,13 @@ csvSummary has_gc (Summary {smEstimate=Estimate m _, ..})
   | otherwise = time
   where
     time =
-      show (irMid mean) ++ "," ++
-      show (irLo mean) ++ "," ++ show (irHi mean) ++ "," ++
-      show (2 * irMid stddev) ++ "," ++
-      show (2 * irLo stddev) ++ "," ++ show (2 * irHi stddev)
+      -- Mean, Mean lower bound, Mean upper bound
+      show mm ++ "," ++ show ml ++ "," ++ show mh ++ "," ++
+      -- Stddev, Stddev lower bound, Stddev upper bound
+      show (2 * sm) ++ "," ++ show (2 * sl) ++ "," ++ show (2 * sh)
       where
-        mean = mapRanged picoToSecsD smMean
-        stddev = mapRanged picoToSecsD smStdev
+        Ranged ml mm mh = mapRanged picoToSecD smMean
+        Ranged sl sm sh = mapRanged picoToSecD smStdev
     gc =
       show (measAllocs m) ++ "," ++ show (measCopied m) ++ "," ++
       show (measMaxMem m)
@@ -1888,9 +1888,9 @@ scale (Measurement n t p a c m) = Measurement n t' p' a' c' m
 
 -- | A range of 'Double' values.
 data Ranged = Ranged
-  { irLo  :: !Double
+  { _irLo :: !Double
   , irMid :: !Double
-  , irHi  :: !Double
+  , _irHi :: !Double
   }
 
 -- | Apply given function to the values in Ranged.
