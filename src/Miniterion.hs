@@ -672,7 +672,7 @@ runBenchmarkable idx fullname b = do
   mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
   let (result, summary) = case mb_sum of
         Nothing -> (TimedOut fullname, emptySummary)
-        Just s  -> (compareVsBaseline meBaseline cfg fullname (smEstimate s), s)
+        Just s  -> (compareVsBaseline meBaseline cfg fullname s, s)
   info (formatSummary result summary)
   liftIO $ do
     mapM_ (putCsvLine meHasRTSStats fullname summary) meCsvHandle
@@ -1117,9 +1117,8 @@ joinQuotedFields (x : xs)
   where
     areQuotesBalanced = even . length . filter (== '"')
 
-compareVsBaseline :: Baseline -> Config -> String -> Estimate -> Result
-compareVsBaseline [] _ _ _ = Done
-compareVsBaseline baseline Config{..} name (Estimate m stdev) = comp mb_old
+compareVsBaseline :: Baseline -> Config -> String -> Summary -> Result
+compareVsBaseline baseline Config{..} name summary = comp mb_old
   where
     comp Nothing = Done
     comp (Just (old_time, old_sigma_x_2))
@@ -1127,14 +1126,14 @@ compareVsBaseline baseline Config{..} name (Estimate m stdev) = comp mb_old
       | percent < 0 = Compared pf (Faster name (-percent))
       | otherwise   = Compared pf (Slower name percent)
       where
-        negligible =
-          abs (time - old_time) < max (2 * picoToSecW stdev) old_sigma_x_2
+        negligible = abs (time - old_time) < max (2 * stdev) old_sigma_x_2
         percent = truncate ((ratio - 1) * 100)
         pf | 1 + cfgFailIfSlower <= ratio = Fail
            | ratio <= 1 - cfgFailIfFaster = Fail
            | otherwise                    = Pass
         ratio = time / old_time
-        time = picoToSecW (measTime m)
+        time = picoToSecD (irMid (smMean summary))
+        stdev = picoToSecD (irMid (smStdev summary))
 
     mb_old :: Maybe (Double, Double)
     mb_old = do
@@ -1145,7 +1144,6 @@ compareVsBaseline baseline Config{..} name (Estimate m stdev) = comp mb_old
         hd:tl -> case break (isPrefixOf prefix) tl of
           (_, []) -> pure hd
           _       -> Nothing
-
       (time_cell, ',' : rest0) <- span (/= ',') <$> stripPrefix prefix line
       (_time_lb_cell, ',' : rest1) <- pure (span (/= ',') rest0)
       (_time_ub_cell, ',' : rest2) <- pure (span (/= ',') rest1)
