@@ -777,8 +777,8 @@ formatChange = \case
   where
     fmt pf = \case
       Negligible -> white "(same as baseline)"
-      Faster _ r -> warn_if pf (printf "(%2i%% less than baseline)" r)
-      Slower _ r -> warn_if pf (printf "(%2i%% more than baseline)" r)
+      Faster _ r -> warn_if pf (printf "(%i%% less than baseline)" r)
+      Slower _ r -> warn_if pf (printf "(%i%% more than baseline)" r)
     warn_if pf =
       (case pf of Fail -> (boldRed "FAIL " <>) . yellow; Pass -> white) .
       stringToDoc
