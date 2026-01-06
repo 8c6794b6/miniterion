@@ -1123,18 +1123,18 @@ compareVsBaseline :: Baseline -> Config -> String -> Summary -> Result
 compareVsBaseline baseline Config{..} name summary = comp mb_old
   where
     comp Nothing = Done
-    comp (Just (old_time, old_sigma_x_2))
+    comp (Just (old_mean, old_sigma_x_2))
       | negligible  = Compared Pass Negligible
       | percent < 0 = Compared pf (Faster name (-percent))
       | otherwise   = Compared pf (Slower name percent)
       where
-        negligible = abs (time - old_time) < max (2 * stdev) old_sigma_x_2
+        negligible = abs (mean - old_mean) < min (2 * stdev) old_sigma_x_2
         percent = truncate ((ratio - 1) * 100)
         pf | 1 + cfgFailIfSlower <= ratio = Fail
            | ratio <= 1 - cfgFailIfFaster = Fail
            | otherwise                    = Pass
-        ratio = time / old_time
-        time = picoToSecD (irMid (smMean summary))
+        ratio = mean / old_mean
+        mean = picoToSecD (irMid (smMean summary))
         stdev = picoToSecD (irMid (smStdev summary))
 
     mb_old :: Maybe (Double, Double)
