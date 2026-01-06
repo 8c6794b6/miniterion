@@ -626,7 +626,6 @@ failedNameAndReason = \case
   Compared Fail (Slower name _) -> Just (name, "too slow")
   Compared Fail (Faster name _) -> Just (name, "too fast")
   _                             -> Nothing
-
 {-# INLINE failedNameAndReason #-}
 
 
