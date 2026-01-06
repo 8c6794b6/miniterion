@@ -693,8 +693,7 @@ iterBenchmarkable n _idx fullname b = do
       pure result
 
 putBenchname :: String -> Miniterion ()
-putBenchname name =
-  info (white "benchmarking " <> boldCyan (fromString name) <> " ")
+putBenchname name = info (white "benchmarking " <> boldCyan (fromString name))
 {-# INLINE putBenchname #-}
 
 withTimeout :: Timeout -> Miniterion a -> Miniterion (Maybe a)
@@ -771,16 +770,20 @@ formatSummary res (Summary{smEstimate=Estimate m _, ..}) =
 
 formatChange :: Result -> Doc
 formatChange = \case
-  Compared pf change -> fmt pf change
+  Compared pf change -> padl <> fmt pf change
   _                  -> ""
   where
+    padl = Doc (\ !menv -> if isVerbose menv then "\n" else " ")
     fmt pf = \case
       Negligible -> white "(same as baseline)"
-      Faster _ r -> warn_if pf (printf "(%i%% less than baseline)" r)
-      Slower _ r -> warn_if pf (printf "(%i%% more than baseline)" r)
-    warn_if pf =
-      (case pf of Fail -> (boldRed "FAIL " <>) . yellow; Pass -> white) .
-      stringToDoc
+      Faster _ p -> more_or_less "less" p
+      Slower _ p -> more_or_less "more" p
+      where
+        more_or_less which p =
+          g ("(" <> showDoc p <> "% " <> which <> " than baseline)")
+        g = case pf of
+          Fail -> (boldRed "FAIL " <>) . yellow
+          Pass -> white
 
 formatRanged :: Ranged -> Doc
 formatRanged (Ranged lo mid hi) =
