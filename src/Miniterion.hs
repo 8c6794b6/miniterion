@@ -58,7 +58,7 @@ module Miniterion
     -- * For interactive use
   , benchmark
 
-    -- * Miniterion specific
+    -- * Configuring Miniterion
     -- $miniterion_specific
   , Config(..)
   , UseColor(..)
