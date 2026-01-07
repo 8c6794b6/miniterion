@@ -1379,23 +1379,10 @@ options =
     "COUNT")
     "Number of bootstrap resamples to perform\n(default: 1000)"
 
-  , Option [] ["color"]
-      (let whens = [("always", Always)
-                   ,("auto", Auto)
-                   ,("never", Never)]
-           match str = isPrefixOf str . fst
-       in  ReqArg (\str (O c m) -> case find (match str) whens of
-                      Just (_, uc) -> O (c {cfgUseColor = uc}) m
-                      _            -> throw (InvalidArgument "color" str))
-           "WHEN")
-      (unlines
-       ["When to use colors, \"auto\", \"always\", or \"never\""
-       ,"(default: auto)"])
-
-  , Option [] ["baseline"]
-    (ReqArg (\str (O c m) -> O (c {cfgBaselinePath = Just str}) m)
+  , Option ['o'] ["output"]
+    (ReqArg (\str (O c m) -> O (c {cfgReportPath = Just str}) m)
     "FILE")
-    "File to read CSV summary from as baseline"
+    "File to write report to"
 
   , Option [] ["csv"]
     (ReqArg (\str (O c m) -> O (c {cfgCsvPath = Just str}) m)
@@ -1407,10 +1394,10 @@ options =
     "FILE")
     "File to write JSON summary to"
 
-  , Option ['o'] ["output"]
-    (ReqArg (\str (O c m) -> O (c {cfgReportPath = Just str}) m)
+  , Option [] ["baseline"]
+    (ReqArg (\str (O c m) -> O (c {cfgBaselinePath = Just str}) m)
     "FILE")
-    "File to write report to"
+    "File to read CSV summary from as baseline"
 
   , Option [] ["fail-if-faster"]
     (ReqArg (\str (O c m) -> case parsePositivePercents str of
@@ -1431,6 +1418,19 @@ options =
      ["Upper bound acceptable slow down in percents. If a"
      ,"benchmark is unacceptable slower than baseline (see"
      ,"--baseline), it will be reported as failed"])
+
+  , Option [] ["color"]
+      (let whens = [("always", Always)
+                   ,("auto", Auto)
+                   ,("never", Never)]
+           match str = isPrefixOf str . fst
+       in  ReqArg (\str (O c m) -> case find (match str) whens of
+                      Just (_, uc) -> O (c {cfgUseColor = uc}) m
+                      _            -> throw (InvalidArgument "color" str))
+           "WHEN")
+      (unlines
+       ["When to use colors, \"auto\", \"always\", or \"never\""
+       ,"(default: auto)"])
 
   , Option ['s'] ["stdev"]
     (ReqArg (\str (O c m) -> case parseNonNegativeParcents str of
