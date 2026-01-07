@@ -1338,7 +1338,7 @@ writeReport _ _ = do
 -- Command line options
 -- ------------------------------------------------------------------------
 
-data Opts = O Config RunMode
+data Opts = O !Config !RunMode
 
 options :: [OptDescr (Opts -> Opts)]
 options =
