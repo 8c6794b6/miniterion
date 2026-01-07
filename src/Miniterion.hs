@@ -449,16 +449,22 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
   default_menv <- getDefaultMEnv cfg1
   let menv0 = default_menv {mePatterns = pats}
       root_bs = bgroup "" bs
-      do_iter n = iterBenchmark n menv0 root_bs >>= summariseResults
+      do_iter n = iterBenchmark n menv0 root_bs
       do_bench !menv = runBenchmark menv root_bs
       with_handles = withCsvSettings . withJSONSettings
+      invalid o = "invalid option `" ++ o ++ "'\n"
+      exit_with f os = do
+        me <- getProgName
+        die (concatMap (\o -> me ++ ": " ++ f o) os ++ briefUsageOf me)
+      print_match n = when (isMatched menv0 n) (putStrLn n)
+      show_names = mapM_ print_match (benchNames [] root_bs)
   case run_mode of
     Help     -> showHelp menv0
-    _         | not (null errs)     -> errorOptions errs
-              | not (null invalids) -> invalidOptions invalids
+    _         | not (null errs)     -> exit_with id errs
+              | not (null invalids) -> exit_with invalid invalids
     Version  -> putStrLn builtWithMiniterion
-    DoList   -> showNames menv0 root_bs
-    DoIter n -> do_iter n
+    DoList   -> show_names
+    DoIter n -> do_iter n >>= summariseResults
     DoBench  -> with_handles do_bench menv0 >>= summariseResults
 
 showHelp :: MEnv -> IO ()
@@ -482,24 +488,8 @@ showHelp menv = do
 builtWithMiniterion :: String
 builtWithMiniterion = "built with miniterion " ++ VERSION_miniterion
 
-errorOptions :: [String] -> IO ()
-errorOptions = exitWithOptions id
-
-invalidOptions :: [String] -> IO ()
-invalidOptions = exitWithOptions (\o -> "invalid option `" ++ o ++ "'\n")
-
-exitWithOptions :: (String -> String) -> [String] -> IO ()
-exitWithOptions f opts = do
-  me <- getProgName
-  let f' opt = me ++ ": " ++ f opt
-  die (concatMap f' opts ++ briefUsageOf me)
-
 briefUsageOf :: String -> String
 briefUsageOf me = "Try `" ++ me ++ " --help' for more information."
-
-showNames :: MEnv -> Benchmark -> IO ()
-showNames menv =
-  mapM_ (\n -> when (isMatched menv n) (putStrLn n)) . benchNames []
 
 
 -- ------------------------------------------------------------------------
