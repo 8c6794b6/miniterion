@@ -324,7 +324,7 @@ whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
 -- | Run a benchmark interactively, providing an interface compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:benchmark benchmark>@.
 benchmark :: Benchmarkable -> IO ()
-benchmark = void . runBenchmark defaultMEnv . bench "..."
+benchmark = void . flip runBenchmark defaultMEnv . bench "..."
 
 -- | Run benchmarks and report results, providing an interface
 -- compatible with @Criterion.Main.<https://hackage.haskell.org/package/criterion/docs/Criterion-Main.html#v:defaultMain defaultMain>@.
@@ -449,8 +449,8 @@ defaultMainWith' cfg0 bs = handleMiniterionException $ do
   default_menv <- getDefaultMEnv cfg1
   let menv0 = default_menv {mePatterns = pats}
       root_bs = bgroup "" bs
-      do_iter n = iterBenchmark n menv0 root_bs
-      do_bench !menv = runBenchmark menv root_bs
+      do_iter n = iterBenchmark n root_bs menv0
+      do_bench = runBenchmark root_bs
       with_handles = withCsvSettings . withJSONSettings
       invalid o = "invalid option `" ++ o ++ "'\n"
       exit_with f os = do
@@ -623,15 +623,15 @@ failedNameAndReason = \case
 -- Running benchmarks
 -- ------------------------------------------------------------------------
 
-runBenchmark :: MEnv -> Benchmark -> IO [Result]
+runBenchmark :: Benchmark -> MEnv -> IO [Result]
 runBenchmark = runBenchmarkWith runBenchmarkable
 
-iterBenchmark :: Word64 -> MEnv -> Benchmark -> IO [Result]
+iterBenchmark :: Word64 -> Benchmark -> MEnv -> IO [Result]
 iterBenchmark n = runBenchmarkWith (iterBenchmarkable n)
 
 runBenchmarkWith :: (Int -> String -> Benchmarkable -> Miniterion a)
-                 -> MEnv -> Benchmark -> IO [a]
-runBenchmarkWith !run !menv b = fst <$> runMiniterion (go [] 0 b) menv
+                 -> Benchmark -> MEnv -> IO [a]
+runBenchmarkWith !run b menv = fst <$> runMiniterion (go [] 0 b) menv
   where
     -- Benchmarks are always wrapped with the root group in
     -- defaultMainWith', selecting the benchmarks to run in Bgroup's
