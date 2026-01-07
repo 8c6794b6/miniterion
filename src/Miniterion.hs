@@ -1442,9 +1442,9 @@ options =
      ,"in percents (default: 5)"])
 
   , Option ['v'] ["verbosity"]
-    (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Int of
-                Just n | 0 <= n && n <= 3 -> O (c {cfgVerbosity = n}) m
-                _ -> throw (InvalidArgument "verbosity" str))
+    (ReqArg (\str (O c m) -> case parseRanged "verbosity" 0 3 str of
+                Right n  -> O (c {cfgVerbosity=n}) m
+                Left err -> throw err)
       "INT")
      "Verbosity level (default: 1)"
 
