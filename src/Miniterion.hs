@@ -1480,7 +1480,7 @@ options =
 
 parseRanged :: (Ord a, Read a, Show a)
             => String -> a -> a -> String -> Either MiniterionException a
-parseRanged lbl lo hi str =
+parseRanged lbl !lo !hi !str =
   case readMaybe str of
     Just n | lo <= n && n <= hi -> Right n
     Just n                      -> Left (out_of_range (show n))
