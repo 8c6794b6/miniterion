@@ -516,7 +516,7 @@ data MEnv = MEnv
     -- ^ File handle to write benchmark result in CSV format.
   , meJsonHandle      :: !(Maybe Handle)
     -- ^ File handle to write benchmark result of JSON summary.
-  , meBaseline        :: !Baseline
+  , meBaseline        :: !(Maybe Baseline)
     -- ^ Set containing baseline information, made from the file
     -- specified by 'cfgBaselinePath'.
   , meUseColor        :: !Bool
@@ -532,7 +532,7 @@ defaultMEnv :: MEnv
 defaultMEnv = MEnv
   { meCsvHandle = Nothing
   , meJsonHandle = Nothing
-  , meBaseline = mempty
+  , meBaseline = Nothing
   , mePatterns = []
   , meConfig = defaultConfig
   , meUseColor = False
@@ -1069,7 +1069,7 @@ type Baseline = [String]
 
 withCsvSettings :: (MEnv -> IO a) -> MEnv -> IO a
 withCsvSettings !act menv0@MEnv{meConfig=cfg} = do
-  baseline <- maybe mempty readBaseline (cfgBaselinePath cfg)
+  baseline <- maybe mempty (fmap Just . readBaseline) (cfgBaselinePath cfg)
   let menv1 = menv0 {meBaseline = baseline}
   case cfgCsvPath cfg of
     Nothing -> act menv1 {meCsvHandle = Nothing}
@@ -1119,16 +1119,15 @@ joinQuotedFields (x : xs)
   where
     areQuotesBalanced = even . length . filter (== '"')
 
-compareVsBaseline :: Baseline -> Config -> String -> Summary -> Result
-compareVsBaseline baseline Config{..} name summary = comp mb_old
+compareVsBaseline :: Maybe Baseline -> Config -> String -> Summary -> Result
+compareVsBaseline mb_baseline Config{..} name summary = maybe Done comp mb_old
   where
-    comp Nothing = Done
-    comp (Just (old_mean, old_sigma_x_2))
+    comp (old_mean, old_stdev_x_2)
       | negligible  = Compared Pass Negligible
       | percent < 0 = Compared pf (Faster name (-percent))
       | otherwise   = Compared pf (Slower name percent)
       where
-        negligible = abs (mean - old_mean) < min (2 * stdev) old_sigma_x_2
+        negligible = abs (mean - old_mean) < min (2 * stdev) old_stdev_x_2
         percent = truncate ((ratio - 1) * 100)
         pf | 1 + cfgFailIfSlower <= ratio = Fail
            | ratio <= 1 - cfgFailIfFaster = Fail
@@ -1139,18 +1138,17 @@ compareVsBaseline baseline Config{..} name summary = comp mb_old
 
     mb_old :: Maybe (Double, Double)
     mb_old = do
+      baseline <- mb_baseline
       let prefix = encodeCsv name ++ ","
-          (_, breaked) = break (isPrefixOf prefix) baseline
-      line <- case breaked of
-        []   -> Nothing
-        hd:tl -> case break (isPrefixOf prefix) tl of
-          (_, []) -> pure hd
-          _       -> Nothing
-      (time_cell, ',' : rest0) <- span (/= ',') <$> stripPrefix prefix line
-      (_time_lb_cell, ',' : rest1) <- pure (span (/= ',') rest0)
-      (_time_ub_cell, ',' : rest2) <- pure (span (/= ',') rest1)
-      let sigma_x_2_cell = takeWhile (/= ',') rest2
-      (,) <$> readMaybe time_cell <*> readMaybe sigma_x_2_cell
+      line <- case break (isPrefixOf prefix) baseline of
+        -- Checking duplicated benchmark names
+        (_, hd:tl) | (_, []) <- break (isPrefixOf prefix) tl -> pure hd
+        _                                                    -> Nothing
+      (mean_cell, ',' : rest0) <- span (/= ',') <$> stripPrefix prefix line
+      (_mean_lb_cell, ',' : rest1) <- pure (span (/= ',') rest0)
+      (_mean_ub_cell, ',' : rest2) <- pure (span (/= ',') rest1)
+      let stdev_x_2_cell = takeWhile (/= ',') rest2
+      (,) <$> readMaybe mean_cell <*> readMaybe stdev_x_2_cell
 
 encodeCsv :: String -> String
 encodeCsv xs
