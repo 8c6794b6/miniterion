@@ -1731,19 +1731,10 @@ measure MEnv{meHasRTSStats=gc} num b =
 
 measureUntil :: MEnv -> Benchmarkable -> IO Summary
 measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
-  | is_once = fmap (measToSummary . mdMeas) (measure menv 1 b)
+  | is_once   = fmap (measToSummary . mdMeas) (measure menv 1 b)
   | otherwise = init_and_go
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
-
-    -- See 'Criterion.Measurement.{squish,series}' in the package
-    -- 'criterion-measurement'.
-    series = squish (unfoldr f 2)
-      where
-        squish = foldr g []
-          where g x xs = x : dropWhile (== x) xs
-        f k = Just (truncate l, l)
-          where l = k * 1.05 :: Double
 
     init_and_go = do
       performGC
@@ -1787,6 +1778,16 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
             formatBootstrap dur cfgResamples (acValidCount acc') (acCount acc')
           pure $ summarize cfg start_time acc' est
         else go ns start_time m2 acc'
+
+-- See 'Criterion.Measurement.{squish,series}' in the package
+-- 'criterion-measurement'.
+series :: [Word64]
+series = squish (unfoldr f 2)
+  where
+    squish = foldr g []
+      where g x xs = x : dropWhile (== x) xs
+    f k = Just (truncate l, l)
+      where l = k * 1.05 :: Double
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement {measTime=t}) =
