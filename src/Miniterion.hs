@@ -1347,7 +1347,7 @@ options =
     "Show this help text"
 
   , Option ['I'] ["ci"]
-    (ReqArg (\str (O c m) -> case parseRanged "ci" 1.0e-3 0.999 str of
+    (ReqArg (\str (O c m) -> case readRanged "ci" 1.0e-3 0.999 str of
                 Right n  -> O (c {cfgInterval=n}) m
                 Left err -> throw err)
      "CI")
@@ -1361,7 +1361,7 @@ options =
     "Time limit to run a benchmark\n(default: no timeout)"
 
   , Option [] ["resamples"]
-    (ReqArg (\str (O c m) -> case parseRanged "resamples" 1 1000000 str of
+    (ReqArg (\str (O c m) -> case readRanged "resamples" 1 1000000 str of
                 Right n  -> O (c {cfgResamples=n}) m
                 Left err -> throw err)
     "COUNT")
@@ -1388,7 +1388,7 @@ options =
     "File to read CSV summary from as baseline"
 
   , Option [] ["fail-if-faster"]
-    (ReqArg (\str (O c m) -> case parsePositivePercents str of
+    (ReqArg (\str (O c m) -> case readPositivePercents str of
                 Just x -> O (c {cfgFailIfFaster = x}) m
                 _      -> throw (InvalidArgument "fail-if-faster" str))
       "NUM")
@@ -1398,7 +1398,7 @@ options =
      ,"--baseline), it will be reported as failed"])
 
   , Option [] ["fail-if-slower"]
-    (ReqArg (\str (O c m) -> case parsePositivePercents str of
+    (ReqArg (\str (O c m) -> case readPositivePercents str of
                 Just x -> O (c {cfgFailIfSlower = x}) m
                 _      -> throw (InvalidArgument "fail-if-slower" str))
       "NUM")
@@ -1421,7 +1421,7 @@ options =
        ,"(default: auto)"])
 
   , Option ['s'] ["stdev"]
-    (ReqArg (\str (O c m) -> case parseNonNegativeParcents str of
+    (ReqArg (\str (O c m) -> case readNonNegativeParcents str of
                 Just x -> O (c {cfgRelStDev = x}) m
                 _      -> throw (InvalidArgument "stdev" str))
      "NUM")
@@ -1430,7 +1430,7 @@ options =
      ,"in percents (default: 5)"])
 
   , Option ['v'] ["verbosity"]
-    (ReqArg (\str (O c m) -> case parseRanged "verbosity" 0 3 str of
+    (ReqArg (\str (O c m) -> case readRanged "verbosity" 0 3 str of
                 Right n  -> O (c {cfgVerbosity=n}) m
                 Left err -> throw err)
       "INT")
@@ -1466,9 +1466,9 @@ options =
     "Show version info"
   ]
 
-parseRanged :: (Ord a, Read a, Show a)
+readRanged :: (Ord a, Read a, Show a)
             => String -> a -> a -> String -> Either MiniterionException a
-parseRanged lbl !lo !hi !str =
+readRanged lbl !lo !hi !str =
   case readMaybe str of
     Just n | lo <= n && n <= hi -> Right n
     Just n                      -> Left (out_of_range (show n))
@@ -1477,14 +1477,14 @@ parseRanged lbl !lo !hi !str =
     out_of_range val =
       OutOfRangeArgument lbl val ("(" ++ show lo ++ "," ++ show hi ++ ")")
 
-parseNonNegativeParcents :: String -> Maybe Double
-parseNonNegativeParcents = parsePercentsWith (>= 0)
+readNonNegativeParcents :: String -> Maybe Double
+readNonNegativeParcents = readPercentsWith (>= 0)
 
-parsePositivePercents :: String -> Maybe Double
-parsePositivePercents = parsePercentsWith (> 0)
+readPositivePercents :: String -> Maybe Double
+readPositivePercents = readPercentsWith (> 0)
 
-parsePercentsWith :: (Double -> Bool) -> String -> Maybe Double
-parsePercentsWith test xs = do
+readPercentsWith :: (Double -> Bool) -> String -> Maybe Double
+readPercentsWith test xs = do
   x <- readMaybe xs
   guard (test x)
   pure (x / 100)
