@@ -1183,7 +1183,7 @@ tmpJSONFile = ".miniterion-tmp.json"
 withJSONFile :: FilePath -> MEnv -> (MEnv -> IO a) -> IO a
 withJSONFile !file !menv !act =
   withFile file WriteMode $ \hdl -> do
-    hSetBuffering hdl NoBuffering
+    hSetBuffering hdl (BlockBuffering Nothing)
     hPutStr hdl $ "[\"miniterion\",\"" ++ VERSION_miniterion ++ "\",["
     act menv {meJsonHandle = Just hdl} `finally` hPutStr hdl "]]"
 
