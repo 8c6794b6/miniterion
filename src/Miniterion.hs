@@ -93,7 +93,7 @@ import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
 import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
                                          OptDescr (..), getOpt', usageInfo)
-import           System.CPUTime         (cpuTimePrecision, getCPUTime)
+import           System.CPUTime         (getCPUTime)
 import           System.Environment     (getArgs, getProgName)
 import           System.Exit            (die, exitFailure)
 import           System.IO              (BufferMode (..), Handle, IOMode (..),
@@ -746,7 +746,7 @@ formatSummary :: Result -> Summary -> Doc
 formatSummary (TimedOut _) _ =
   boldRed " FAIL" <> "\n" <>
   yellow "Timed out while running this benchmark\n\n"
-formatSummary res (Summary{smEstimate=Estimate m _, ..}) =
+formatSummary res (Summary{..}) =
   formatChange res <> "\n" <>
   --
   white "time                 " <> formatRanged smOLS <> "\n" <>
@@ -756,7 +756,7 @@ formatSummary res (Summary{smEstimate=Estimate m _, ..}) =
   --
   formatOutliers smOutliers <>
   formatOutlierVariance smOutlierVar <>
-  formatGC m <> "\n\n"
+  formatGC smMeasurement <> "\n\n"
 
 formatChange :: Result -> Doc
 formatChange = \case
@@ -854,19 +854,20 @@ formatBootstrap dur nresample nvalid nmeas =
     percent =
       truncate ((fromIntegral nvalid / fromIntegral nmeas :: Double) * 100)
 
-formatMeasurement :: Measurement -> Doc
-formatMeasurement (Measurement n t _ a c m) =
+formatMeasurement :: Measurement -> Double -> Double -> Doc
+formatMeasurement (Measurement n t _ a c m) mean sd =
   showDoc n <>
-  (if n == 1 then " iteration gives " else " iteragions give ") <>
-  showPicos5 t' <> fromString (printf " (%d/%d)" t n) <>
+  (if n == 1 then " iteration gives " else " iterations give ") <>
+  showDoc t <> " (" <>
+  showPicos5 (word64ToDouble (t `quot` n)) <> "/run) " <>
+  "mean: " <> showPicos5 mean <> ", sd: " <> showPicos5 sd <>
+  " (" <> stringToDoc (printf "%.2f%%" (100*sd/mean)) <> ")" <>
   Doc (\ !menv ->
          if meHasRTSStats menv then
            printf " alloc: %d copied: %d max: %d" a c m
          else
            "") <>
   "\n"
-  where
-    !t' = word64ToDouble (t `quot` n)
 
 -- | Show picoseconds, fitting number in 5 characters.
 showPicos5 :: Double -> Doc
@@ -1076,7 +1077,7 @@ putCsvLine has_gc name summary hdl =
   hPutStrLn hdl (encodeCsv name ++ "," ++ csvSummary has_gc summary)
 
 csvSummary :: Bool -> Summary -> String
-csvSummary has_gc (Summary {smEstimate=Estimate m _, ..})
+csvSummary has_gc (Summary {smMeasurement=m, ..})
   | has_gc    = time ++ "," ++ gc
   | otherwise = time
   where
@@ -1602,21 +1603,16 @@ instance Semigroup Measured where
                        }
   {-# INLINE (<>) #-}
 
-data Estimate = Estimate
-  { estMean  :: !Measurement
-  , estStdev :: !Word64 -- ^ stdev in picoseconds
-  }
-
 data Summary = Summary
-  { smEstimate   :: !Estimate
-  , smOLS        :: !Ranged
-  , smR2         :: !Ranged
-  , smStdev      :: !Ranged
-  , smMean       :: !Ranged
-  , smOutlierVar :: !OutlierVariance
-  , smOutliers   :: Outliers
-  , smKDEs       :: KDE
-  , smMeasured   :: [Measurement]
+  { smMeasurement :: !Measurement -- ^ Last measurement
+  , smOLS         :: !Ranged
+  , smR2          :: !Ranged
+  , smStdev       :: !Ranged
+  , smMean        :: !Ranged
+  , smOutlierVar  :: !OutlierVariance
+  , smOutliers    :: Outliers
+  , smKDEs        :: KDE
+  , smMeasured    :: [Measurement]
   }
 
 emptySummary :: Summary
@@ -1633,40 +1629,6 @@ emptySummary = measToSummary Measurement
 square :: Num a => a -> a
 square x = x * x
 {-# INLINE square #-}
-
-predict
-  :: Measurement -- ^ time for the previous run
-  -> Measurement -- ^ time for the current run
-  -> Estimate
-predict (Measurement n1 t1 p1 a1 c1 m1) (Measurement n2 t2 p2 a2 c2 m2) =
-  Estimate
-  { estMean  = Measurement n1 t p (fit a1 a2) (fit c1 c2) (max m1 m2)
-  , estStdev = truncate (sqrt d)
-  }
-  where
-    !t = fit t1 t2
-    !p = fit p1 p2
-    fit x1 x2 = n1 * (x1 `quot` n3 + x2 `quot` n3)
-      where
-        n3 = n1 + n2
-    d = square (word64ToDouble t1 - t') + square (word64ToDouble t2 - r * t')
-      where
-        r = word64ToDouble n2 / word64ToDouble n1
-        t' = word64ToDouble t
-
-predictPerturbed :: Measurement -> Measurement -> Estimate
-predictPerturbed t1 t2 = Estimate
-  { estMean = estMean (predict t1 t2)
-  , estStdev = max
-    (estStdev (predict (lo t1) (hi t2)))
-    (estStdev (predict (hi t1) (lo t2)))
-  }
-  where
-    hi meas = meas { measTime = measTime meas + precision }
-    lo meas | measTime meas > precision =
-              meas { measTime = measTime meas - precision }
-            | otherwise = meas { measTime = 0 }
-    precision = max (fromInteger cpuTimePrecision) oneMillisecond
 
 -- | One millisecond in picoseconds.
 oneMillisecond :: Num a => a
@@ -1707,7 +1669,6 @@ measure MEnv{meHasRTSStats=gc} num b =
     end_cpu_time <- getCpuPicoSecs
     performMinorGC
     (end_allocs, end_copied, end_max_mem) <- getAllocsAndCopied gc
-
     let meas = Measurement
           { measIters = num
           , measTime = end_time - start_time
@@ -1716,7 +1677,6 @@ measure MEnv{meHasRTSStats=gc} num b =
           , measCopied = end_copied - start_copied
           , measMaxMem = max end_max_mem start_max_mem
           }
-
     pure $ Measured meas end_time
 
 measureUntil :: MEnv -> Benchmarkable -> IO Summary
@@ -1726,39 +1686,37 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
   where
     is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
 
+    -- See Criterion.Measurement.runBenchmark
     init_and_go = do
-      performGC
-      start_time <- getPicoSecs
-      Measured m0 _ <- measure menv 1 b
-      debug' menv $ formatMeasurement m0
-      go series start_time m0 $ Acc
-        { acMeasurements = [m0]
-        , acCount = 1
-        , acValidCount = if threshold < measTime m0 then 1 else 0
-        }
+      runLoop b 1 id
+      start_time <- performGC >> getPicoSecs
+      go series start_time (Acc 0 0 [])
 
-    go [] _ _ _ = error "measureUntil.go: empty series"
-    go (!n:ns) !start_time m1 !acc = do
-      Measured m2 end_time <- measure menv n b
-      debug' menv $ formatMeasurement m2
-      let est@(Estimate measN stdevN) = predictPerturbed m1 m2
-          !is_stdev_in_target_range =
-            stdevN < truncate (cfgRelStDev * word64ToDouble (measTime measN))
+    go [] _ _ = error "measureUntil.go: empty series"
+    go (!n:ns) !start_time !acc = do
+      Measured m end_time <- measure menv n b
+      -- As in tasty-bench, estimating mean and standard deviation
+      -- using a fragment of the measurements (4 most recent).
+      -- Earlier measurements tends to contain noises.
+      let (!sd, !mean) = meanAndStdDev 4 (take 4 ts)
+            where
+              ts = [ word64ToDouble measTime / word64ToDouble measIters
+                   | Measurement{..} <- acMeasurements acc' ]
+          !is_stdev_in_target_range = sd < cfgRelStDev * mean
           !is_timeout_soon = case cfgTimeout of
             Timeout micros ->
-              let next_end = end_time + measTime m2*2 + 30*oneMillisecond
+              let next_end = end_time + measTime m * 2 + 30 * oneMillisecond
               in  micros * 1000000 < next_end - start_time
             _ -> False
-          !valid_count | threshold < measTime m2 = acValidCount acc + 1
-                       | otherwise = acValidCount acc
-          !acc' = acc { acMeasurements = m2 : acMeasurements acc
+          !acc' = acc { acMeasurements = m : acMeasurements acc
                       , acCount = acCount acc + 1
-                      , acValidCount = valid_count
+                      , acValidCount = acValidCount acc +
+                                       if threshold < measTime m then 1 else 0
                       }
+      debug' menv (formatMeasurement m mean sd)
       warnOnTooLongBenchmark cfgTimeout start_time end_time
       -- Need at least 4 long enough measurements to get IQR while
-      -- computing KDE. Later the measurement data are filtered in the
-      -- 'summarize' function.
+      -- computing KDE.
       if 4 <= acValidCount acc' &&
          (is_stdev_in_target_range ||
           is_timeout_soon)
@@ -1766,13 +1724,13 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
           let dur = end_time - start_time
           verbose' menv $
             formatBootstrap dur cfgResamples (acValidCount acc') (acCount acc')
-          pure $ summarize cfg start_time acc' est
-        else go ns start_time m2 acc'
+          pure $ summarize cfg start_time acc'
+        else go ns start_time acc'
 
 -- See 'Criterion.Measurement.{squish,series}' in the package
 -- 'criterion-measurement'.
 series :: [Word64]
-series = squish (unfoldr f 2)
+series = squish (unfoldr f 1)
   where
     squish = foldr g []
       where g x xs = x : dropWhile (== x) xs
@@ -1781,7 +1739,7 @@ series = squish (unfoldr f 2)
 
 measToSummary :: Measurement -> Summary
 measToSummary m@(Measurement {measTime=t}) =
-  Summary { smEstimate = Estimate m 0
+  Summary { smMeasurement = m
           , smOLS = toRanged (word64ToDouble t)
           , smR2 = toRanged 1
           , smStdev = toRanged 0
@@ -1818,12 +1776,14 @@ data Acc = Acc
 
 -- | 30 milliseconds in picosecond.
 threshold :: Word64
-threshold = 30000000000
+threshold = 30 * oneMillisecond
 {-# INLINE threshold #-}
 
-summarize :: Config -> Seed -> Acc -> Estimate -> Summary
-summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
-  { smEstimate = est
+summarize :: Config -> Seed -> Acc -> Summary
+summarize Config{..} seed Acc{..} = Summary
+  { smMeasurement = case acMeasurements of
+                      m:_ -> scale m -- the last measurement
+                      _   -> error "summarize: empty measurements"
   , smOLS = ols
   , smR2 = r2
   , smStdev = stdev
@@ -1834,7 +1794,6 @@ summarize Config{..} seed Acc{..} (Estimate measN _stdevN) = Summary
   , smMeasured = measured
   }
   where
-    est = Estimate (scale measN) (ceiling (irMid stdev))
     (ols, r2) = bootstrap' (regress nc) acCount xys
     (stdev, mean) = bootstrap' (meanAndStdDev nvc) acValidCount times
     (!ov, outliers) = computeOutliers (irMid stdev) iqr
@@ -1984,13 +1943,13 @@ data IQR = IQR
   }
 
 -- | Compute mean and standard deviation.
-meanAndStdDev :: Double -- ^ Length of the samples
-              -> [Double] -- ^ The samples
-              -> (Double, Double) -- ^ (mean, standard deviation)
+meanAndStdDev :: Double           -- ^ Length of the samples
+              -> [Double]         -- ^ The samples
+              -> (Double, Double) -- ^ (standard deviation, mean)
 meanAndStdDev !n xs = (stddev, mean)
   where
     !mean = sum xs / n
-    stddev = sqrt (sum [square (x - mean) | x <- xs] / n)
+    !stddev = sqrt (sum [square (x - mean) | x <- xs] / n)
 
 -- | Simple linear regression with ordinary least square.
 regress :: Double             -- ^ Length of the list
