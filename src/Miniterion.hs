@@ -744,7 +744,7 @@ isVerbose e = 1 < cfgVerbosity (meConfig e)
 
 formatSummary :: Result -> Summary -> Doc
 formatSummary (TimedOut _) _ =
-  boldRed "FAIL" <> "\n" <>
+  boldRed " FAIL" <> "\n" <>
   yellow "Timed out while running this benchmark\n\n"
 formatSummary res (Summary{smEstimate=Estimate m _, ..}) =
   formatChange res <> "\n" <>
