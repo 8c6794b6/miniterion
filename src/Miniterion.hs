@@ -1607,8 +1607,8 @@ data Summary = Summary
   { smMeasurement :: !Measurement -- ^ Last measurement
   , smOLS         :: !Ranged
   , smR2          :: !Ranged
-  , smStdev       :: !Ranged
   , smMean        :: !Ranged
+  , smStdev       :: !Ranged
   , smOutlierVar  :: !OutlierVariance
   , smOutliers    :: Outliers
   , smKDEs        :: KDE
@@ -1786,8 +1786,8 @@ summarize Config{..} seed Acc{..} = Summary
                       _   -> error "summarize: empty measurements"
   , smOLS = ols
   , smR2 = r2
-  , smStdev = stdev
   , smMean = mean
+  , smStdev = stdev
   , smOutlierVar = ov
   , smOutliers = outliers
   , smKDEs = kde
