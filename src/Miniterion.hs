@@ -1898,9 +1898,20 @@ resample !seed !nresamp !f !norig orig = go nresamp [] idxs0
     go 0 !acc _    = acc
     go n !acc idxs = go (n-1) acc' idxs'
       where
-        (is, idxs') = splitAt (word64ToInt norig) idxs
+        (is, idxs') = splitAt' norig idxs
         !acc' = let !bs = f [orig_arr ! i | i <- is] in bs : acc
 {-# INLINE resample #-}
+
+-- | Simplified version of 'Prelude.splitAt'. The order of the first
+-- element of the resulting pair is reversed to make the internal loop
+-- tail-recursive.
+splitAt' :: Word64 -> [a] -> ([a], [a])
+splitAt' = go []
+  where
+    go !acc 0 xs      = (acc, xs)
+    go !acc _ []      = (acc, [])
+    go !acc !m (x:xs) = go (x:acc) (m - 1) xs
+{-# INLINABLE splitAt' #-}
 
 
 -- ------------------------------------------------------------------------
@@ -2111,10 +2122,6 @@ splitmix64 s = (r3, r0)
 -- ------------------------------------------------------------------------
 -- Converting numbers
 -- ------------------------------------------------------------------------
-
-word64ToInt :: Word64 -> Int
-word64ToInt = fromIntegral
-{-# INLINE word64ToInt #-}
 
 word64ToDouble :: Word64 -> Double
 word64ToDouble = fromIntegral
