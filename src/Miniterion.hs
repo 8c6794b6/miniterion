@@ -752,7 +752,7 @@ formatSummary res (Summary{..}) =
   white "time                 " <> formatRanged smOLS <> "\n" <>
         "                     " <> formatR2 smR2 <> "\n" <>
   white "mean                 " <> formatRanged smMean <> "\n" <>
-  white "std dev              " <> formatRanged (mapRanged (* 2) smStdev) <>
+  white "std dev              " <> formatRanged smStdev <>
   --
   formatOutliers smOutliers <>
   formatOutlierVariance smOutlierVar <>
@@ -1085,7 +1085,7 @@ csvSummary has_gc (Summary {smMeasurement=m, ..})
       -- Mean, Mean lower bound, Mean upper bound
       show mm ++ "," ++ show ml ++ "," ++ show mh ++ "," ++
       -- Stddev, Stddev lower bound, Stddev upper bound
-      show (2 * sm) ++ "," ++ show (2 * sl) ++ "," ++ show (2 * sh)
+      show sm ++ "," ++ show sl ++ "," ++ show sh
       where
         Ranged ml mm mh = mapRanged picoToSecD smMean
         Ranged sl sm sh = mapRanged picoToSecD smStdev
@@ -1113,12 +1113,12 @@ joinQuotedFields (x : xs)
 compareVsBaseline :: Maybe Baseline -> Config -> String -> Summary -> Result
 compareVsBaseline mb_baseline Config{..} name summary = maybe Done comp mb_old
   where
-    comp (old_mean, old_stdev_x_2)
+    comp (old_mean, old_stdev)
       | negligible  = Compared Pass Negligible
       | percent < 0 = Compared pf (Faster name (-percent))
       | otherwise   = Compared pf (Slower name percent)
       where
-        negligible = abs (mean - old_mean) < min (2 * stdev) old_stdev_x_2
+        negligible = abs (mean - old_mean) < min stdev old_stdev
         percent = truncate ((ratio - 1) * 100)
         pf | 1 + cfgFailIfSlower <= ratio = Fail
            | ratio <= 1 - cfgFailIfFaster = Fail
@@ -1138,8 +1138,8 @@ compareVsBaseline mb_baseline Config{..} name summary = maybe Done comp mb_old
       (mean_cell, ',' : rest0) <- span (/= ',') <$> stripPrefix prefix line
       (_mean_lb_cell, ',' : rest1) <- pure (span (/= ',') rest0)
       (_mean_ub_cell, ',' : rest2) <- pure (span (/= ',') rest1)
-      let stdev_x_2_cell = takeWhile (/= ',') rest2
-      (,) <$> readMaybe mean_cell <*> readMaybe stdev_x_2_cell
+      let stdev_cell = takeWhile (/= ',') rest2
+      (,) <$> readMaybe mean_cell <*> readMaybe stdev_cell
 
 encodeCsv :: String -> String
 encodeCsv xs
