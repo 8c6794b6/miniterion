@@ -1813,7 +1813,7 @@ summarize Config{..} seed Acc{..} = Summary
     -- unreliable. See 'Criterion.Analysis.analyseSample'.
     (times, xys) = foldl' f ([],[]) measured
       where
-        f (!as, !bs) Measurement{..} =
+        f (!as,!bs) Measurement{..} =
           let i = word64ToDouble measIters
               t = word64ToDouble measTime
               as' = if threshold < measTime then t/i : as else as
