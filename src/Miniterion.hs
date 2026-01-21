@@ -1626,10 +1626,6 @@ emptySummary = measToSummary Measurement
   }
 {-# INLINABLE emptySummary #-}
 
-square :: Num a => a -> a
-square x = x * x
-{-# INLINE square #-}
-
 -- | One millisecond in picoseconds.
 oneMillisecond :: Num a => a
 oneMillisecond = 1000000000
@@ -1692,13 +1688,13 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
       start_time <- performGC >> getPicoSecs
       go series start_time (Acc 0 0 [])
 
-    go [] _ _ = error "measureUntil.go: empty series"
-    go (!n:ns) !start_time !acc = do
+    go [] !_ !_ = error "measureUntil.go: empty series"
+    go (n:ns) start_time acc = do
       Measured m end_time <- measure menv n b
-      -- As in tasty-bench, estimating mean and standard deviation
-      -- using a fragment of the measurements (4 most recent).
-      -- Earlier measurements tends to contain noises.
-      let (!sd, !mean) = meanAndStdDev 4 (take 4 ts)
+      -- As in tasty-bench, estimating with running mean and running
+      -- standard deviation using a fragment of the measurements (4
+      -- most recent). Earlier measurements tends to contain noises.
+      let (!mean, !sd) = meanAndStdDev 4 (take 4 ts)
             where
               ts = [ word64ToDouble measTime / word64ToDouble measIters
                    | Measurement{..} <- acMeasurements acc' ]
@@ -1795,7 +1791,7 @@ summarize Config{..} seed Acc{..} = Summary
   }
   where
     (ols, r2) = bootstrap' (regress nc) acCount xys
-    (stdev, mean) = bootstrap' (meanAndStdDev nvc) acValidCount times
+    (mean, stdev) = bootstrap' (meanAndStdDev nvc) acValidCount times
     (!ov, outliers) = computeOutliers (irMid stdev) iqr
     kde = computeKDE (irMid stdev) nvc iqr
     measured = reverse acMeasurements
@@ -1953,39 +1949,43 @@ data IQR = IQR
   , iqSorted      :: ![Double] -- ^ Sorted samples
   }
 
--- | Compute mean and standard deviation.
+-- | Mean and standard deviation (unbiased).
 meanAndStdDev :: Double           -- ^ Length of the samples
               -> [Double]         -- ^ The samples
-              -> (Double, Double) -- ^ (standard deviation, mean)
-meanAndStdDev !n xs = (stddev, mean)
+              -> (Double, Double) -- ^ (mean, standard deviation)
+meanAndStdDev !n xs = (mean, sqrt (ssd / (n - 1)))
   where
-    !mean = sum xs / n
-    !stddev = sqrt (sum [square (x - mean) | x <- xs] / n)
+    (!mean, !ssd) = meanAndSumSqDevs n xs
+{-# INLINABLE meanAndStdDev #-}
+
+-- | Mean and sum of squared deviations.
+meanAndSumSqDevs :: Double           -- ^ Length of the samples
+                 -> [Double]         -- ^ The samples
+                 -> (Double, Double) -- ^ (mean, sum of squared deviations)
+meanAndSumSqDevs !n xs = (mean, sumKBN [square (x - mean) | x <- xs])
+  where
+    !mean = sumKBN xs / n
+{-# INLINABLE meanAndSumSqDevs #-}
 
 -- | Simple linear regression with ordinary least square.
 regress :: Double             -- ^ Length of the list
         -> [(Double, Double)] -- ^ List of x and y values
-        -> (Double, Double)
-regress n xs_and_ys = (a, r2)
+        -> (Double, Double)   -- ^ (coefficient, R²)
+regress !n xs_and_ys = (a, r2)
   where
-    -- means
-    (!x_mean, !y_mean) = (sum_x / n, sum_y / n)
-      where
-        (!sum_x, !sum_y) = foldl' f (0,0) xs_and_ys
-        f (!sx, !sy) (x, y) = (sx + x,  sy + y)
+    -- means and sums of squared deviation
+    (xs,ys) = unzip xs_and_ys
+    (!x_mean, !x_ssd) = meanAndSumSqDevs n xs
+    (!y_mean, !sst) = meanAndSumSqDevs n ys
 
-    -- ols and sst
-    (!nume, !deno, !sst) = foldl' f (0,0,0) xs_and_ys
-      where
-        f (!nu, !de, !ss) (x, y) =
-          let dx = x - x_mean
-              dy = y - y_mean
-          in  (nu + dx * dy, de + square dx, ss + square dy)
-    !a = nume / deno
-    -- b = y_mean - (a * x_mean)
+    -- coefficient
+    !dotp = sumKBN [(x - x_mean) * (y - y_mean) | (x,y) <- xs_and_ys]
+    !a = dotp / x_ssd
+    -- !b = y_mean - (a * x_mean)
 
     -- ssr and R^2
-    !ssr = sum [square (y - a * x) | (x,y) <- xs_and_ys]
+    f x = a * x -- use `a * x + b' instead?
+    !ssr = sumKBN [square (y - f x) | (x,y) <- xs_and_ys]
     !r2 = 1 - (ssr / sst)
 {-# INLINABLE regress #-}
 
@@ -2052,7 +2052,7 @@ computeKDE !s !n IQR{..} = KDE values density
 
     -- Using simple Gaussian kernel function and Silverman's rule of
     -- thumb for bandwidth.
-    density = [sum [k ((x-xi)/h) | xi<-iqSorted] / (n*h) | x<-values]
+    density = [sumKBN [k ((x-xi)/h) | xi<-iqSorted] / (n*h) | x<-values]
       where
         k u = exp (-(u*u/2)) / sqrt (2*pi)
         !h = 0.9 * min s_in_seconds iqPseudosigma * (n ** (-0.2))
@@ -2063,6 +2063,27 @@ addOutliers :: Outliers -> Outliers -> Outliers
 addOutliers (Outliers n1 ls1 lm1 hm1 hs1) (Outliers n2 ls2 lm2 hm2 hs2) =
   Outliers (n1+n2) (ls1+ls2) (lm1+lm2) (hm1+hm2) (hs1+hs2)
 {-# INLINE addOutliers #-}
+
+
+-- ------------------------------------------------------------------------
+-- Arithmetic
+-- ------------------------------------------------------------------------
+
+square :: Num a => a -> a
+square x = x * x
+{-# INLINE square #-}
+
+-- | Kahan–Babuška-Neumaier summation, from
+-- <https://en.wikipedia.org/wiki/Kahan_summation_algorithm#Precision
+-- Kahan summation algorithm Wikipedia page>.
+sumKBN :: [Double] -> Double
+sumKBN = uncurry (+) . foldl' f (0,0)
+  where
+    f (!s,!c) x = (s',c')
+      where
+        s' = s + x
+        c' | abs s >= abs x = c + ((s - s') + x)
+           | otherwise      = c + ((x - s') + s)
 
 
 -- ------------------------------------------------------------------------
