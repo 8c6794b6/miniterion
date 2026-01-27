@@ -1861,10 +1861,10 @@ bootstrap2 :: Seed                      -- ^ Random seed
            -> (Ranged, Ranged)
 bootstrap2 !seed !nresamp !ci !f !norig orig = (br, cr)
   where
-    !br = confInterval b ci nresamp bs
-    !cr = confInterval c ci nresamp cs
-    (!b, !c) = f orig
-    (!bs, !cs) = unzip (resample seed nresamp f norig orig)
+    br = confInterval b ci nresamp bs
+    cr = confInterval c ci nresamp cs
+    (b, c) = f orig
+    (bs, cs) = unzip (resample seed nresamp f norig orig)
 {-# INLINE bootstrap2 #-}
 
 confInterval :: Double   -- ^ The point value
