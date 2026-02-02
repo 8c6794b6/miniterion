@@ -424,7 +424,7 @@ data MatchMode
 -- | Express duration for timeout.
 data Timeout
   = Timeout !Word64
-  -- ^ Duration in microseconds (e.g., 2000000 for 2 seconds).
+  -- ^ Duration in picoseconds (e.g., @truncate 2e12@ for 2 seconds).
   | NoTimeout
   -- ^ Run without timeout.
 
@@ -688,8 +688,8 @@ putBenchname name = info (white "benchmarking " <> boldCyan (fromString name))
 
 withTimeout :: Timeout -> Miniterion a -> Miniterion (Maybe a)
 withTimeout tout m@(Miniterion r) = case tout of
-  Timeout micro -> Miniterion (timeout (fromIntegral micro) . r)
-  NoTimeout     -> fmap Just m
+  Timeout pico -> Miniterion (timeout (picoToMicroSecWI pico) . r)
+  NoTimeout    -> fmap Just m
 
 benchNames :: [String] -> Benchmark -> [String]
 benchNames = go
@@ -1356,7 +1356,7 @@ options =
 
   , Option ['L'] ["time-limit"]
     (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Double of
-                Just n -> O (c {cfgTimeout = Timeout (truncate (1e6 * n))}) m
+                Just n -> O (c {cfgTimeout = Timeout (truncate (1e12 * n))}) m
                 _      -> throw (InvalidArgument "time-limit" str))
      "SECS")
     "Time limit to run a benchmark\n(default: no timeout)"
@@ -1556,6 +1556,10 @@ picoToSecD :: Double -> Double
 picoToSecD pico = pico / 1e12
 {-# INLINE picoToSecD #-}
 
+picoToMicroSecWI :: Word64 -> Int
+picoToMicroSecWI pico = word64ToInt (pico `quot` 1000000)
+{-# INLINE picoToMicroSecWI #-}
+
 
 -- ------------------------------------------------------------------------
 -- Getting GC info
@@ -1700,10 +1704,8 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
                    | Measurement{..} <- acMeasurements acc' ]
           !is_stdev_in_target_range = sd < cfgRelStDev * mean
           !is_timeout_soon = case cfgTimeout of
-            Timeout micros ->
-              let next_end = end_time + measTime m * 2 + 30 * oneMillisecond
-              in  micros * 1000000 < next_end - start_time
-            _ -> False
+            Timeout dur -> dur < (end_time + measTime m * 2) - start_time
+            _           -> False
           !acc' = acc { acMeasurements = m : acMeasurements acc
                       , acCount = acCount acc + 1
                       , acValidCount = acValidCount acc +
@@ -2147,6 +2149,10 @@ splitmix64 s = (r3, r0)
 word64ToDouble :: Word64 -> Double
 word64ToDouble = fromIntegral
 {-# INLINE word64ToDouble #-}
+
+word64ToInt :: Word64 -> Int
+word64ToInt = fromIntegral
+{-# INLINE word64ToInt #-}
 
 
 -- ------------------------------------------------------------------------
