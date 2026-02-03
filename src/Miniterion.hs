@@ -1,9 +1,11 @@
 {-# LANGUAGE BangPatterns              #-}
 {-# LANGUAGE CPP                       #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleInstances         #-}
 {-# LANGUAGE LambdaCase                #-}
 {-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE RecordWildCards           #-}
+{-# LANGUAGE TypeFamilies              #-}
 {-# OPTIONS_GHC -funbox-strict-fields  #-}
 {- |
 Module:       Miniterion
@@ -1597,12 +1599,12 @@ instance Semigroup Measured where
   Measured !m1 _ <> Measured !m2 !e2 = Measured m3 e2
     where
       on h g = h (g m1) (g m2)
-      add = on (+)
+      add_on = on (+)
       m3 = Measurement { measIters = measIters m2
-                       , measTime = add measTime
-                       , measCpuTime = add measCpuTime
-                       , measAllocs = add measAllocs
-                       , measCopied = add measCopied
+                       , measTime = add_on measTime
+                       , measCpuTime = add_on measCpuTime
+                       , measAllocs = add_on measAllocs
+                       , measCopied = add_on measCopied
                        , measMaxMem = on max measMaxMem
                        }
   {-# INLINE (<>) #-}
@@ -1957,37 +1959,30 @@ meanAndStdDev :: Double           -- ^ Length of the samples
               -> (Double, Double) -- ^ (mean, standard deviation)
 meanAndStdDev !n xs = (mean, sqrt (ssd / (n - 1)))
   where
-    (!mean, !ssd) = meanAndSumSqDevs n xs
-{-# INLINABLE meanAndStdDev #-}
-
--- | Mean and sum of squared deviations.
-meanAndSumSqDevs :: Double           -- ^ Length of the samples
-                 -> [Double]         -- ^ The samples
-                 -> (Double, Double) -- ^ (mean, sum of squared deviations)
-meanAndSumSqDevs !n xs = (mean, sumKBN [square (x - mean) | x <- xs])
-  where
+    !ssd = sumKBN [square (x - mean) | x <- xs]
     !mean = sumKBN xs / n
-{-# INLINABLE meanAndSumSqDevs #-}
+{-# INLINABLE meanAndStdDev #-}
 
 -- | Simple linear regression with ordinary least square.
 regress :: Double             -- ^ Length of the list
         -> [(Double, Double)] -- ^ List of x and y values
         -> (Double, Double)   -- ^ (coefficient, R²)
-regress !n xs_and_ys = (a, r2)
+regress !n xys = (a, r2)
   where
     -- means and sums of squared deviation
-    (xs,ys) = unzip xs_and_ys
-    (!x_mean, !x_ssd) = meanAndSumSqDevs n xs
-    (!y_mean, !sst) = meanAndSumSqDevs n ys
+    (!x_sum, !y_sum) = sumKBN xys
+    (!x_mean, !y_mean) = (x_sum / n, y_sum / n)
+    (!x_ssd,!sst,!dotp) = sumKBN [ (square xd, square yd, xd * yd)
+                                 | (x,y) <- xys
+                                 , let xd = x - x_mean; yd = y - y_mean ]
 
-    -- coefficient
-    !dotp = sumKBN [(x - x_mean) * (y - y_mean) | (x,y) <- xs_and_ys]
+    -- coefficient and fitted function
     !a = dotp / x_ssd
     -- !b = y_mean - (a * x_mean)
+    f x = a * x -- use `a * x + b' instead?
 
     -- ssr and R^2
-    f x = a * x -- use `a * x + b' instead?
-    !ssr = sumKBN [square (y - f x) | (x,y) <- xs_and_ys]
+    !ssr = sumKBN [square (y - f x) | (x,y) <- xys]
     !r2 = 1 - (ssr / sst)
 {-# INLINABLE regress #-}
 
@@ -2066,26 +2061,69 @@ addOutliers (Outliers n1 ls1 lm1 hm1 hs1) (Outliers n2 ls2 lm2 hm2 hs2) =
   Outliers (n1+n2) (ls1+ls2) (lm1+lm2) (hm1+hm2) (hs1+hs2)
 {-# INLINE addOutliers #-}
 
-
--- ------------------------------------------------------------------------
--- Arithmetic
--- ------------------------------------------------------------------------
-
 square :: Num a => a -> a
 square x = x * x
 {-# INLINE square #-}
 
--- | Kahan–Babuška-Neumaier summation, from
+
+-- ------------------------------------------------------------------------
+-- Summation
+-- ------------------------------------------------------------------------
+
+-- Kahan–Babuška-Neumaier summation, from
 -- <https://en.wikipedia.org/wiki/Kahan_summation_algorithm#Precision
 -- Kahan summation algorithm Wikipedia page>.
-sumKBN :: [Double] -> Double
-sumKBN = uncurry (+) . foldl' f (0,0)
-  where
-    f (!s,!c) x = (s',c')
-      where
-        s' = s + x
-        c' | abs s >= abs x = c + ((s - s') + x)
-           | otherwise      = c + ((x - s') + s)
+
+sumKBN :: SumKBN a => [a] -> a
+sumKBN = unKBN . foldl' add zero
+{-# INLINE sumKBN #-}
+{-# SPECIALIZE sumKBN :: [Double] -> Double #-}
+{-# SPECIALIZE sumKBN :: [(Double,Double)] -> (Double,Double) #-}
+{-# SPECIALIZE sumKBN :: [(Double,Double,Double)] -> (Double,Double,Double) #-}
+
+-- | Type class to describe the element and intermediate state of
+-- Kahan-Babuška-Neumaier summation.
+class SumKBN a where
+  data KBN a
+  zero  :: KBN a
+  add   :: KBN a -> a -> KBN a
+  unKBN :: KBN a -> a
+
+instance SumKBN Double where
+  data KBN Double = SC !Double !Double
+  zero = SC 0 0
+  {-# INLINE zero #-}
+
+  -- This implementation of `add' is identical to the `kbn' found in
+  -- the math-functions package.
+  add (SC !s !c) x = SC s' c'
+    where
+      s' = s + x
+      c' | abs s >= abs x = c + ((s - s') + x)
+         | otherwise      = c + ((x - s') + s)
+  {-# INLINE add #-}
+
+  unKBN (SC s c) = s + c
+  {-# INLINE unKBN #-}
+
+instance SumKBN (Double, Double) where
+  data KBN (Double, Double) = SC2 !(KBN Double) !(KBN Double)
+  zero = SC2 zero zero
+  {-# INLINE zero #-}
+  add (SC2 !sx !sy) (x,y) = SC2 (add sx x) (add sy y)
+  {-# INLINE add #-}
+  unKBN (SC2 sx sy) = (unKBN sx, unKBN sy)
+  {-# INLINE unKBN #-}
+
+instance SumKBN (Double, Double, Double) where
+  data KBN (Double, Double, Double) =
+    SC3 !(KBN Double) !(KBN Double) !(KBN Double)
+  zero = SC3 zero zero zero
+  {-# INLINE zero #-}
+  add (SC3 !sx !sy !sz) (x,y,z) = SC3 (add sx x) (add sy y) (add sz z)
+  {-# INLINE add #-}
+  unKBN (SC3 sx sy sz) = (unKBN sx, unKBN sy, unKBN sz)
+  {-# INLINE unKBN #-}
 
 
 -- ------------------------------------------------------------------------
