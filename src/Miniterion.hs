@@ -1969,12 +1969,14 @@ regress :: Double             -- ^ Length of the list
         -> (Double, Double)   -- ^ (coefficient, R²)
 regress !n xys = (a, r2)
   where
-    -- means and sums of squared deviation
+    -- means
     (!x_sum, !y_sum) = sumKBN xys
     (!x_mean, !y_mean) = (x_sum / n, y_sum / n)
-    (!x_ssd,!sst,!dotp) = sumKBN [ (square xd, square yd, xd * yd)
-                                 | (x,y) <- xys
-                                 , let xd = x - x_mean; yd = y - y_mean ]
+
+    -- sum of squared deviations and dot product
+    (!x_ssd, !sst, !dotp) =
+      sumKBN [ (square xd, square yd, xd * yd)
+             | (x,y) <- xys, let xd = x - x_mean; yd = y - y_mean ]
 
     -- coefficient and fitted function
     !a = dotp / x_ssd
