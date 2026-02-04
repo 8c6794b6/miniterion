@@ -2072,19 +2072,16 @@ square x = x * x
 -- Summation
 -- ------------------------------------------------------------------------
 
--- Kahan–Babuška-Neumaier summation, from
+-- Kahan–Babuška-Neumaier summation, see the
 -- <https://en.wikipedia.org/wiki/Kahan_summation_algorithm#Precision
 -- Kahan summation algorithm Wikipedia page>.
 
 sumKBN :: SumKBN a => [a] -> a
 sumKBN = unKBN . foldl' add zero
 {-# INLINE sumKBN #-}
-{-# SPECIALIZE sumKBN :: [Double] -> Double #-}
-{-# SPECIALIZE sumKBN :: [(Double,Double)] -> (Double,Double) #-}
-{-# SPECIALIZE sumKBN :: [(Double,Double,Double)] -> (Double,Double,Double) #-}
 
--- | Type class to describe the element and intermediate state of
--- Kahan-Babuška-Neumaier summation.
+-- | Type class to describe the element and intermediate state of the
+-- summation.
 class SumKBN a where
   data KBN a
   zero  :: KBN a
@@ -2096,9 +2093,9 @@ instance SumKBN Double where
   zero = SC 0 0
   {-# INLINE zero #-}
 
-  -- This implementation of `add' is identical to the `kbn' found in
-  -- the math-functions package.
-  add (SC !s !c) x = SC s' c'
+  -- This implementation of `add' is basically same as the `sum kbn'
+  -- found in the math-functions package.
+  add (SC s c) x = SC s' c'
     where
       s' = s + x
       c' | abs s >= abs x = c + ((s - s') + x)
@@ -2108,24 +2105,37 @@ instance SumKBN Double where
   unKBN (SC s c) = s + c
   {-# INLINE unKBN #-}
 
-instance SumKBN (Double, Double) where
-  data KBN (Double, Double) = SC2 !(KBN Double) !(KBN Double)
+instance SumKBN a => SumKBN (a,a) where
+  data KBN (a,a) = SC2 !(KBN a) !(KBN a)
   zero = SC2 zero zero
   {-# INLINE zero #-}
-  add (SC2 !sx !sy) (x,y) = SC2 (add sx x) (add sy y)
+  {-# SPECIALIZE zero :: KBN (Double,Double) #-}
+
+  add (SC2 sx sy) (x,y) = SC2 (add sx x) (add sy y)
   {-# INLINE add #-}
+  {-# SPECIALIZE add :: KBN (Double,Double) -> (Double,Double)
+                     -> KBN (Double,Double) #-}
+
   unKBN (SC2 sx sy) = (unKBN sx, unKBN sy)
   {-# INLINE unKBN #-}
+  {-# SPECIALIZE unKBN :: KBN (Double,Double) -> (Double,Double) #-}
 
-instance SumKBN (Double, Double, Double) where
-  data KBN (Double, Double, Double) =
-    SC3 !(KBN Double) !(KBN Double) !(KBN Double)
+instance SumKBN a => SumKBN (a,a,a) where
+  data KBN (a,a,a) = SC3 !(KBN a) !(KBN a) !(KBN a)
   zero = SC3 zero zero zero
   {-# INLINE zero #-}
-  add (SC3 !sx !sy !sz) (x,y,z) = SC3 (add sx x) (add sy y) (add sz z)
+  {-# SPECIALIZE zero :: KBN (Double,Double,Double) #-}
+
+  add (SC3 sx sy sz) (x,y,z) = SC3 (add sx x) (add sy y) (add sz z)
   {-# INLINE add #-}
+  {-# SPECIALIZE add :: KBN (Double,Double,Double)
+                     -> (Double,Double,Double)
+                     -> KBN (Double,Double,Double) #-}
+
   unKBN (SC3 sx sy sz) = (unKBN sx, unKBN sy, unKBN sz)
   {-# INLINE unKBN #-}
+  {-# SPECIALIZE unKBN :: KBN (Double,Double,Double)
+                       -> (Double,Double,Double) #-}
 
 
 -- ------------------------------------------------------------------------
