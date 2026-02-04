@@ -2147,39 +2147,40 @@ data Xoshiro256 = Xoshiro256 !Word64 !Word64 !Word64 !Word64
 randoms :: Seed   -- ^ Random seed
         -> Word64 -- ^ Upper bound of generated random value (exclusive)
         -> [Word64]
-randoms seed ub = drop 1 $ unfoldr f (0, xoshiro256init seed)
+randoms !seed !ub = drop 1 $ unfoldr f (0, xoshiro256init seed)
   where
-    f (!x, s) = let !x' = x `rem` ub in Just (x', xoshiro256pp s)
+    f (!x, !s) = let !x' = x `rem` ub in Just (x', xoshiro256pp s)
 
 xoshiro256pp :: Xoshiro256 -> (Word64, Xoshiro256)
 xoshiro256pp (Xoshiro256 s0 s1 s2 s3) = (result, state)
   where
-    result = rotl (s0 + s3) 23 + s0
-    t = shiftL s1 17
-    s2' = s2 `xor` s0
-    s3' = s3 `xor` s1
-    s1' = s1 `xor` s2'
-    s0' = s0 `xor` s3'
-    s2'' = s2' `xor` t
-    s3'' = rotl s3' 45
-    state = Xoshiro256 s0' s1' s2'' s3''
-    rotl x k = shiftL x k .|. shiftR x (64 - k)
+    !result = rotl (s0 + s3) 23 + s0
+    !state = Xoshiro256 s0' s1' s2'' s3''
+      where
+        t = shiftL s1 17
+        s2' = s2 `xor` s0
+        s3' = s3 `xor` s1
+        s1' = s1 `xor` s2'
+        s0' = s0 `xor` s3'
+        s2'' = s2' `xor` t
+        s3'' = rotl s3' 45
+    rotl !x !k = shiftL x k .|. shiftR x (64 - k)
 
 xoshiro256init :: Seed -> Xoshiro256
-xoshiro256init seed = Xoshiro256 s0 s1 s2 s3
+xoshiro256init !seed = Xoshiro256 s0 s1 s2 s3
   where
-    (s0, seed') = splitmix64 seed
-    s1 = shiftR s0 32
-    (s2, _) = splitmix64 seed'
-    s3 = shiftR s2 32
+    (!s0, !seed') = splitmix64 seed
+    !s1 = shiftR s0 32
+    (!s2, _) = splitmix64 seed'
+    !s3 = shiftR s2 32
 
 splitmix64 :: Word64 -> (Word64, Word64)
-splitmix64 s = (r3, r0)
+splitmix64 !s = (r3, r0)
   where
-    r0 = s + 0x9e3779b97f4a7c15
-    r1 = (r0 `xor` shiftR r0 30) * 0xbf58476d1ce4e5b9
-    r2 = (r1 `xor` shiftR r1 27) * 0x94d049bb133111eb
-    r3 = r2 `xor` shiftR r2 31
+    !r0 = s + 0x9e3779b97f4a7c15
+    !r1 = (r0 `xor` shiftR r0 30) * 0xbf58476d1ce4e5b9
+    !r2 = (r1 `xor` shiftR r1 27) * 0x94d049bb133111eb
+    !r3 = r2 `xor` shiftR r2 31
 
 
 -- ------------------------------------------------------------------------
