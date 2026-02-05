@@ -1976,7 +1976,8 @@ regress !n xys = (a, r2)
     -- sum of squared deviations and dot product
     (!x_ssd, !sst, !dotp) =
       sumKBN [ (square xd, square yd, xd * yd)
-             | (x,y) <- xys, let xd = x - x_mean; yd = y - y_mean ]
+             | (x,y) <- xys
+             , let xd = x - x_mean; yd = y - y_mean ]
 
     -- coefficient and fitted function
     !a = dotp / x_ssd
