@@ -2076,6 +2076,9 @@ square x = x * x
 -- Kahan–Babuška-Neumaier summation, see the
 -- <https://en.wikipedia.org/wiki/Kahan_summation_algorithm#Precision
 -- Kahan summation algorithm Wikipedia page>.
+--
+-- The 'sumKBN' function is used to sum list of Double,
+-- (Double,Double), (Double,Double,Double) ... etc, element wise.
 
 sumKBN :: SumKBN a => [a] -> a
 sumKBN = unKBN . foldl' add zero
