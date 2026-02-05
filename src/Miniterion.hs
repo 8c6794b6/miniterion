@@ -1211,11 +1211,15 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
       "}"
       where
         est (Ranged lo mid hi) =
-          "{\"estError\":{\"confIntCL\":" ++ show ci ++
-          ",\"confIntLDX\":" ++ show (mid - lo) ++
-          ",\"confIntUDX\":" ++ show (hi - mid) ++
-          "},\"estPoint\":" ++ show mid ++
+          "{\"estError\":" ++ confInt ++
+          ",\"estPoint\":" ++ show mid ++
           "}"
+          where
+            confInt =
+              "{\"confIntCL\":" ++ show ci ++
+              ",\"confIntLDX\":" ++ show (mid - lo) ++
+              ",\"confIntUDX\":" ++ show (hi - mid) ++
+              "}"
         variance =
           "{\"ovDesc\":\"" ++ ovDesc ++ "\"" ++
           ",\"ovEffect\":\"" ++ show ovEffect ++ "\"" ++
