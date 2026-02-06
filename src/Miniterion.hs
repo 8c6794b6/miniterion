@@ -1216,9 +1216,11 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
           "}"
           where
             confInt =
+              -- The `hi' value could be NaN for OLS and R^2. Fall
+              -- back to 0 in such case.
               "{\"confIntCL\":" ++ show ci ++
               ",\"confIntLDX\":" ++ show (mid - lo) ++
-              ",\"confIntUDX\":" ++ show (hi - mid) ++
+              ",\"confIntUDX\":" ++ show (if isNaN hi then 0 else hi - mid) ++
               "}"
         variance =
           "{\"ovDesc\":\"" ++ ovDesc ++ "\"" ++
