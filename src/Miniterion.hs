@@ -2062,7 +2062,7 @@ computeKDE !s !n IQR{..} = KDE values density
       where
         k u = exp (-(u*u/2)) / sqrt (2*pi)
         !h = 0.9 * min s_in_seconds iqPseudosigma * (n ** (-0.2))
-        s_in_seconds = s / 1e12
+        s_in_seconds = picoToSecD s
 {-# INLINABLE computeKDE #-}
 
 addOutliers :: Outliers -> Outliers -> Outliers
