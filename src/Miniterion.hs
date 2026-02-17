@@ -83,14 +83,15 @@ module Miniterion
 import           Control.Exception      (Exception (..), SomeException (..),
                                          evaluate, finally, handle, throw,
                                          throwIO)
-import           Control.Monad          (guard, unless, void, when)
+import           Control.Monad          (guard, unless, void, when, (>=>))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Bits              (shiftL, shiftR, xor, (.|.))
 import           Data.Char              (toLower)
 import           Data.Foldable          (find, foldlM)
 import           Data.Int               (Int64)
-import           Data.List              (intercalate, isPrefixOf, nub, sort,
-                                         stripPrefix, tails, unfoldr)
+import           Data.List              (intercalate, isPrefixOf, sort, tails,
+                                         unfoldr)
+import           Data.Maybe             (mapMaybe)
 import           Data.String            (IsString (..))
 import           Data.Word              (Word64)
 import           System.Console.GetOpt  (ArgDescr (..), ArgOrder (..),
@@ -1057,8 +1058,19 @@ showDoc = stringToDoc . show
 -- CSV
 -- ------------------------------------------------------------------------
 
--- XXX: Could use `Data.Set.Set'.
-type Baseline = [String]
+-- XXX: Could use `Data.Map.Map String (Double,Double)'.
+
+type Baseline = [CsvEntry]
+
+data CsvEntry = CsvEntry
+  { ceName   :: !String
+  , ceMean   :: !Double
+  , ceStdDev :: !Double
+  }
+
+instance NFData CsvEntry where
+  rnf (CsvEntry name mean stddev) = rnf name `seq` mean `seq` stddev `seq` ()
+  {-# INLINE rnf #-}
 
 withCsvSettings :: (MEnv -> IO a) -> MEnv -> IO a
 withCsvSettings !act menv0@MEnv{meConfig=cfg} = do
@@ -1100,7 +1112,8 @@ readBaseline path = handle handler go
   where
     handler :: SomeException -> IO a
     handler _ = throwIO (CannotReadFile (Just "baseline") path)
-    go = readFile path >>= evaluate . force . nub . joinQuotedFields . lines
+    go = readFile path >>= evaluate . force .
+         mapMaybe parseCsvEntry . joinQuotedFields . lines
 
 joinQuotedFields :: [String] -> [String]
 joinQuotedFields [] = []
@@ -1113,9 +1126,10 @@ joinQuotedFields (x : xs)
     areQuotesBalanced = even . length . filter (== '"')
 
 compareVsBaseline :: Maybe Baseline -> Config -> String -> Summary -> Result
-compareVsBaseline mb_baseline Config{..} name summary = maybe Done comp mb_old
+compareVsBaseline mb_baseline Config{..} name summary =
+  maybe Done comp (mb_baseline >>= find ((== name) . ceName))
   where
-    comp (old_mean, old_stdev)
+    comp (CsvEntry {ceMean=old_mean, ceStdDev=old_stdev})
       | negligible  = Compared Pass Negligible
       | percent < 0 = Compared pf (Faster name (-percent))
       | otherwise   = Compared pf (Slower name percent)
@@ -1129,20 +1143,6 @@ compareVsBaseline mb_baseline Config{..} name summary = maybe Done comp mb_old
         mean = picoToSecD (irMid (smMean summary))
         stdev = picoToSecD (irMid (smStdev summary))
 
-    mb_old :: Maybe (Double, Double)
-    mb_old = do
-      baseline <- mb_baseline
-      let prefix = encodeCsv name ++ ","
-      line <- case break (isPrefixOf prefix) baseline of
-        -- Checking duplicated benchmark names
-        (_, hd:tl) | (_, []) <- break (isPrefixOf prefix) tl -> pure hd
-        _                                                    -> Nothing
-      (mean_cell, ',' : rest0) <- span (/= ',') <$> stripPrefix prefix line
-      (_mean_lb_cell, ',' : rest1) <- pure (span (/= ',') rest0)
-      (_mean_ub_cell, ',' : rest2) <- pure (span (/= ',') rest1)
-      let stdev_cell = takeWhile (/= ',') rest2
-      (,) <$> readMaybe mean_cell <*> readMaybe stdev_cell
-
 encodeCsv :: String -> String
 encodeCsv xs
   | any (`elem` xs) (",\"\n\r" :: String) = '"' : go xs -- opening quote
@@ -1151,6 +1151,47 @@ encodeCsv xs
     go []         = ['"'] -- closing quote
     go ('"' : ys) = '"' : '"' : go ys
     go (y : ys)   = y : go ys
+
+
+-- ------------------------------------------------------------------------
+-- Parser
+-- ------------------------------------------------------------------------
+
+newtype P a = P {runP :: String -> Maybe (a, String)}
+
+instance Functor P where
+  fmap f (P p) = P (p >=> \(a,s') -> pure (f a,s'))
+  {-# INLINE fmap #-}
+
+instance Applicative P where
+  pure x = P (\s -> Just (x,s))
+  {-# INLINE pure #-}
+  P f <*> a = P (f >=> \(f',s') -> runP (fmap f' a) s')
+  {-# INLINE (<*>) #-}
+
+parseCsvEntry :: String -> Maybe CsvEntry
+parseCsvEntry = fmap fst . runP p_csv_entry
+  where
+    p_csv_entry = CsvEntry <$> p_name <*>
+                  (p_double <* p_cell <* p_cell) <*>
+                  p_double
+    p_cell = P $ \str -> case span (/= ',') str of
+      (xs, ',':rest) -> pure (xs, rest)
+      _              -> Nothing
+    p_name = P $ \str -> case str of
+      '"':rest -> decode [] rest
+      _        -> runP p_cell str
+      where
+        decode !acc xs = case xs of
+          '"':'"':rest -> decode ('"':acc) rest
+          '"':',':rest -> pure (reverse acc, rest)
+          x:rest       -> decode (x:acc) rest
+          []           -> Nothing
+    p_double = P $ \str -> do
+      (cell, rest) <- runP p_cell str
+      d <- readMaybe cell
+      pure (d, rest)
+{-# INLINE parseCsvEntry #-}
 
 
 -- ------------------------------------------------------------------------
