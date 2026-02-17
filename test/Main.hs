@@ -90,7 +90,7 @@ benchmarkable = testGroup "benchmarkable"
   , testGroup "perRunEnv"
        ([ testCase "wc with perRunEnv" $
           defaultMainWith'
-          ["--stdev", "90"]
+          ["--stddev", "90"]
           [ bench "wc" $
             perRunEnv (readFile miniterionDotCabal) (pure . wc) ]
         | os == "linux"
@@ -169,20 +169,20 @@ options = testGroup "options"
   , testCase "listing name of benchmark using env and irrefultable pat" $
     benchWithEnvAndIrrPat ["--list"]
 
-  , testCase "stdev option" $
-    benchFib4 ["--stdev", "20"]
+  , testCase "stddev option" $
+    benchFib4 ["--stddev", "20"]
 
-  , testCase "short stdev option" $
+  , testCase "short stddev option" $
     benchFib4 ["-s", "20"]
 
-  , testCase "infinit stdev" $
-    benchFib4 ["--stdev", "Infinity"]
+  , testCase "infinit stddev" $
+    benchFib4 ["--stddev", "Infinity"]
 
-  , testCase "invalid stdev arg" $
-    shouldExitFailure $ emptyMain ["--stdev", "foo"]
+  , testCase "invalid stddev arg" $
+    shouldExitFailure $ emptyMain ["--stddev", "foo"]
 
-  , testCase "missing stdev arg" $
-    shouldExitFailure $ emptyMain ["--stdev"]
+  , testCase "missing stddev arg" $
+    shouldExitFailure $ emptyMain ["--stddev"]
 
   , testCase "invalid time-mode option" $
     shouldExitFailure $ benchFib4 ["--time-mode", "blah"]
@@ -475,14 +475,14 @@ timelimit :: TestTree
 timelimit = testGroup "timeout"
   [ testCase "time limit, long name" $
     shouldExitFailure $
-    benchFib32 ["--time-limit", "1e-6", "--stdev", "1e-9"]
+    benchFib32 ["--time-limit", "1e-6", "--stddev", "1e-9"]
 
   , testCase "time limit, short name" $
     shouldExitFailure $
-    benchFib32 ["-L", "1e-9", "--stdev", "1e-32"]
+    benchFib32 ["-L", "1e-9", "--stddev", "1e-32"]
 
   , testCase "time limit, return before the limit" $
-    benchFib32 ["-L", "5", "--stdev", "10"]
+    benchFib32 ["-L", "5", "--stddev", "10"]
 
   , testCase "invalid time limit arg" $
     shouldExitFailure $
@@ -572,10 +572,10 @@ defaultMainWith' args = quietly . withArgs args' . Miniterion.defaultMain
   where
 #if linux_HOST_OS
     -- Running the tests in CI for other os than Linux is slow, using
-    -- higher value for stdev to make it faster to terminate.
+    -- higher value for stddev to make it faster to terminate.
     args' = args
 #else
-    args' = "--stdev=20" : args
+    args' = "--stddev=20" : args
 #endif
 
 quietly :: IO a -> IO a

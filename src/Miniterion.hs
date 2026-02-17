@@ -357,7 +357,7 @@ defaultConfig = Config
   , cfgTimeout = NoTimeout
   , cfgInterval = 0.95
   , cfgResamples = 1000
-  , cfgRelStDev = 0.05
+  , cfgRelStdDev = 0.05
   , cfgVerbosity = 1
   , cfgBaselinePath = Nothing
   , cfgCsvPath = Nothing
@@ -392,7 +392,7 @@ data Config = Config
     -- ^ Confidence interval
   , cfgResamples    :: !Word64
     -- ^ Number of bootstrap resamples to perform
-  , cfgRelStDev     :: !Double
+  , cfgRelStdDev    :: !Double
     -- ^ Relative standard deviation for terminating benchmarks.
   , cfgVerbosity    :: !Int
     -- ^ Verbosity level.
@@ -755,7 +755,7 @@ formatSummary res (Summary{..}) =
   white "time                 " <> formatRanged smOLS <> "\n" <>
         "                     " <> formatR2 smR2 <> "\n" <>
   white "mean                 " <> formatRanged smMean <> "\n" <>
-  white "std dev              " <> formatRanged smStdev <>
+  white "std dev              " <> formatRanged smStdDev <>
   --
   formatOutliers smOutliers <>
   formatOutlierVariance smOutlierVar <>
@@ -1102,7 +1102,7 @@ csvSummary has_gc (Summary {smMeasurement=m, ..})
       show sm ++ "," ++ show sl ++ "," ++ show sh
       where
         Ranged ml mm mh = mapRanged picoToSecD smMean
-        Ranged sl sm sh = mapRanged picoToSecD smStdev
+        Ranged sl sm sh = mapRanged picoToSecD smStdDev
     gc =
       show (measAllocs m) ++ "," ++ show (measCopied m) ++ "," ++
       show (measMaxMem m)
@@ -1129,19 +1129,19 @@ compareVsBaseline :: Maybe Baseline -> Config -> String -> Summary -> Result
 compareVsBaseline mb_baseline Config{..} name summary =
   maybe Done comp (mb_baseline >>= find ((== name) . ceName))
   where
-    comp (CsvEntry {ceMean=old_mean, ceStdDev=old_stdev})
+    comp (CsvEntry {ceMean=old_mean, ceStdDev=old_stddev})
       | negligible  = Compared Pass Negligible
       | percent < 0 = Compared pf (Faster name (-percent))
       | otherwise   = Compared pf (Slower name percent)
       where
-        negligible = abs (mean - old_mean) < min stdev old_stdev
+        negligible = abs (mean - old_mean) < min stddev old_stddev
         percent = truncate ((ratio - 1) * 100)
         pf | 1 + cfgFailIfSlower <= ratio = Fail
            | ratio <= 1 - cfgFailIfFaster = Fail
            | otherwise                    = Pass
         ratio = mean / old_mean
         mean = picoToSecD (irMid (smMean summary))
-        stdev = picoToSecD (irMid (smStdev summary))
+        stddev = picoToSecD (irMid (smStdDev summary))
 
 encodeCsv :: String -> String
 encodeCsv xs
@@ -1248,7 +1248,7 @@ putJSONObject !idx !name !ci Summary{..} hdl = do
       "{\"anMean\":" ++ est (mapRanged picoToSecD smMean) ++
       ",\"anOutlierVar\":" ++ variance ++
       ",\"anRegress\":[" ++ reg ++ "]" ++
-      ",\"anStdDev\":" ++ est (mapRanged picoToSecD smStdev) ++
+      ",\"anStdDev\":" ++ est (mapRanged picoToSecD smStdDev) ++
       "}"
       where
         est (Ranged lo mid hi) =
@@ -1470,10 +1470,10 @@ options =
        ["When to use colors, \"auto\", \"always\", or \"never\""
        ,"(default: auto)"])
 
-  , Option ['s'] ["stdev"]
+  , Option ['s'] ["stddev"]
     (ReqArg (\str (O c m) -> case readNonNegativeParcents str of
-                Just x -> O (c {cfgRelStDev = x}) m
-                _      -> throw (InvalidArgument "stdev" str))
+                Just x -> O (c {cfgRelStdDev = x}) m
+                _      -> throw (InvalidArgument "stddev" str))
      "NUM")
     (unlines
      ["Target relative standard deviation of measurement"
@@ -1661,7 +1661,7 @@ data Summary = Summary
   , smOLS         :: !Ranged
   , smR2          :: !Ranged
   , smMean        :: !Ranged
-  , smStdev       :: !Ranged
+  , smStdDev      :: !Ranged
   , smOutlierVar  :: !OutlierVariance
   , smOutliers    :: Outliers
   , smKDEs        :: KDE
@@ -1733,7 +1733,7 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
   | is_once   = fmap (measToSummary . mdMeas) (measure menv 1 b)
   | otherwise = init_and_go
   where
-    is_once = isInfinite cfgRelStDev && 0 < cfgRelStDev
+    is_once = isInfinite cfgRelStdDev && 0 < cfgRelStdDev
 
     -- See Criterion.Measurement.runBenchmark
     init_and_go = do
@@ -1751,7 +1751,7 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
             where
               ts = [ word64ToDouble measTime / word64ToDouble measIters
                    | Measurement{..} <- acMeasurements acc' ]
-          !is_stdev_in_target_range = sd < cfgRelStDev * mean
+          !is_stddev_in_target_range = sd < cfgRelStdDev * mean
           !is_timeout_soon = case cfgTimeout of
             Timeout dur -> dur < (end_time + measTime m * 2) - start_time
             _           -> False
@@ -1765,7 +1765,7 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
       -- Need at least 4 long enough measurements to get IQR while
       -- computing KDE.
       if 4 <= acValidCount acc' &&
-         (is_stdev_in_target_range ||
+         (is_stddev_in_target_range ||
           is_timeout_soon)
         then do
           let dur = end_time - start_time
@@ -1789,7 +1789,7 @@ measToSummary m@(Measurement {measTime=t}) =
   Summary { smMeasurement = m
           , smOLS = toRanged (word64ToDouble t)
           , smR2 = toRanged 1
-          , smStdev = toRanged 0
+          , smStdDev = toRanged 0
           , smMean =  toRanged (word64ToDouble t)
           , smKDEs = KDE [] []
           , smMeasured = []
@@ -1834,7 +1834,7 @@ summarize Config{..} seed Acc{..} = Summary
   , smOLS = ols
   , smR2 = r2
   , smMean = mean
-  , smStdev = stdev
+  , smStdDev = stddev
   , smOutlierVar = ov
   , smOutliers = outliers
   , smKDEs = kde
@@ -1842,9 +1842,9 @@ summarize Config{..} seed Acc{..} = Summary
   }
   where
     (ols, r2) = bootstrap' (regress nc) acCount xys
-    (mean, stdev) = bootstrap' (meanAndStdDev nvc) acValidCount times
-    (!ov, outliers) = computeOutliers (irMid stdev) iqr
-    kde = computeKDE (irMid stdev) nvc iqr
+    (mean, stddev) = bootstrap' (meanAndStdDev nvc) acValidCount times
+    (!ov, outliers) = computeOutliers (irMid stddev) iqr
+    kde = computeKDE (irMid stddev) nvc iqr
     measured = reverse acMeasurements
 
     bootstrap' :: Ord a => ([a] -> (Double, Double)) -> Word64 -> [a]
