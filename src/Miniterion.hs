@@ -668,7 +668,7 @@ runBenchmarkable idx fullname b = do
   putBenchname fullname
   debug "\n"
   liftIO $ hFlush stdout
-  mb_sum <- withTimeout meTimeout (liftIO $ measureUntil menv b)
+  mb_sum <- liftIO $ withTimeout meTimeout (measureUntil menv b)
   let (result, summary) = case mb_sum of
         Nothing -> (TimedOut fullname, emptySummary)
         Just s  -> (compareVsBaseline meBaseline cfg fullname s, s)
@@ -684,7 +684,7 @@ iterBenchmarkable n _idx fullname b = do
   MEnv{..} <- getMEnv
   putBenchname fullname
   liftIO $ hFlush stdout
-  mb_unit <- withTimeout meTimeout (liftIO $ runLoop b n id)
+  mb_unit <- liftIO $ withTimeout meTimeout (runLoop b n id)
   case mb_unit of
     Just () -> info "\n" >> pure Done
     _ -> do
@@ -696,10 +696,10 @@ putBenchname :: String -> Miniterion ()
 putBenchname name = info (white "benchmarking " <> boldCyan (fromString name))
 {-# INLINE putBenchname #-}
 
-withTimeout :: Maybe Word64 -> Miniterion a -> Miniterion (Maybe a)
-withTimeout tout m@(Miniterion r) = case tout of
-  Just pico -> Miniterion (timeout (picoToMicroSecWI pico) . r)
-  Nothing   -> fmap Just m
+withTimeout :: Maybe Word64 -> IO a -> IO (Maybe a)
+withTimeout tout io = case tout of
+  Just pico -> timeout (picoToMicroSecWI pico) io
+  Nothing   -> fmap Just io
 
 benchNames :: [String] -> Benchmark -> [String]
 benchNames = go
