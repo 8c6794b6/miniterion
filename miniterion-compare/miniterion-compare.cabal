@@ -67,6 +67,8 @@ executable cr
     main-is:          Main.hs
     build-depends:    criterion
     mixins:           criterion (Criterion.Main as Miniterion)
+    if impl (ghc >= 9.14)
+      buildable: False
 
 executable ga
     import:           app
