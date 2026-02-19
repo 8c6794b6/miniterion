@@ -148,6 +148,8 @@ import           Paths_miniterion       (getDataFileName)
 -- information to support 'envWithCleanup'.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#t:Benchmark Benchmark>@.
+--
+-- @since 0.1.0.0
 data Benchmark
   = Bench String Benchmarkable
   | Bgroup String [Benchmark]
@@ -157,6 +159,8 @@ data Benchmark
 -- 'nfIO', 'whnfIO', 'nfAppIO', and 'whnfAppIO'.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#t:Benchmarkable Benchmarkable>@.
+--
+-- @since 0.1.0.0
 data Benchmarkable = forall a. NFData a =>
   Benchmarkable { allocEnv      :: Word64 -> IO a
                 , cleanEnv      :: Word64 -> a -> IO ()
@@ -168,6 +172,8 @@ data Benchmarkable = forall a. NFData a =>
 -- action.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:toBenchmarkable toBenchmarkable>@.
+--
+-- @since 0.1.0.0
 toBenchmarkable :: (Word64 -> IO ()) -> Benchmarkable
 toBenchmarkable f = Benchmarkable noop (const noop) (const f) False
 {-# INLINE toBenchmarkable #-}
@@ -176,6 +182,8 @@ toBenchmarkable f = Benchmarkable noop (const noop) (const f) False
 --
 -- The type signature is compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:bench bench>@.
+--
+-- @since 0.1.0.0
 bench
   :: String -- ^ Name of this benchmark.
   -> Benchmarkable -- ^ Benchmark target.
@@ -186,6 +194,8 @@ bench = Bench
 --
 -- The type signature is compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:bgroup bgroup>@.
+--
+-- @since 0.1.0.0
 bgroup
   :: String -- ^ Name of this benchmark group.
   -> [Benchmark] -- ^ List of benchmarks in the group.
@@ -196,6 +206,8 @@ bgroup = Bgroup
 -- environment, usually reading large input data from file.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:env env>@.
+--
+-- @since 0.1.0.0
 env
   :: NFData env
   => IO env -- ^ Action to create the environment.
@@ -207,6 +219,8 @@ env alloc = envWithCleanup alloc noop
 -- the environment.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:envWithCleanup envWithCleanup>@.
+--
+-- @since 0.1.0.0
 envWithCleanup
   :: NFData env
   => IO env -- ^ Action to create the environment.
@@ -219,6 +233,8 @@ envWithCleanup alloc clean = Environment alloc (void . clean)
 -- batch of runs of the benchmarkable.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perBatchEnv perBatchEnv>@.
+--
+-- @since 0.1.0.0
 perBatchEnv
   :: (NFData env, NFData b)
   => (Word64 -> IO env)
@@ -232,6 +248,8 @@ perBatchEnv alloc = perBatchEnvWithCleanup alloc (const noop)
 -- to clean up the environment.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perBatchEnvWithCleanup perBatchEnvWithCleanup>@.
+--
+-- @since 0.1.0.0
 perBatchEnvWithCleanup
   :: (NFData env, NFData b)
   => (Word64 -> IO env)
@@ -250,6 +268,7 @@ perBatchEnvWithCleanup alloc clean run = Benchmarkable alloc clean run' False
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perRunEnv perRunEnv>@.
 --
+-- @since 0.1.0.0
 perRunEnv
   :: (NFData env, NFData b)
   => IO env -- ^ Action to create an environment for a single run.
@@ -262,6 +281,7 @@ perRunEnv alloc = perRunEnvWithCleanup alloc noop
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:perRunEnvWithCleanup perRunEnvWithCleanup>@.
 --
+-- @since 0.1.0.0
 perRunEnvWithCleanup
   :: (NFData env, NFData b)
   => IO env -- ^ Action to create an environment for a single run.
@@ -278,6 +298,8 @@ perRunEnvWithCleanup alloc clean run = bm {perRun = True}
 -- Ideally @x@ should be a primitive data type like 'Data.Int.Int'.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nf nf>@.
+--
+-- @since 0.1.0.0
 nf :: NFData b => (a -> b) -> a -> Benchmarkable
 nf = fmap toBenchmarkable . nf' rnf
 
@@ -287,6 +309,8 @@ nf = fmap toBenchmarkable . nf' rnf
 -- data type like 'Data.Int.Int'.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnf whnf>@.
+--
+-- @since 0.1.0.0
 whnf :: (a -> b) -> a -> Benchmarkable
 whnf = fmap toBenchmarkable . whnf'
 
@@ -295,6 +319,8 @@ whnf = fmap toBenchmarkable . whnf'
 -- 'Control.DeepSeq.rnf').
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nfIO nfIO>@.
+--
+-- @since 0.1.0.0
 nfIO :: NFData a => IO a -> Benchmarkable
 nfIO = toBenchmarkable . ioToBench rnf
 
@@ -302,6 +328,8 @@ nfIO = toBenchmarkable . ioToBench rnf
 -- compute its weak head normal form.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnfIO whnfIO>@.
+--
+-- @since 0.1.0.0
 whnfIO :: IO a -> Benchmarkable
 whnfIO = toBenchmarkable . ioToBench id
 
@@ -312,6 +340,8 @@ whnfIO = toBenchmarkable . ioToBench id
 -- data type like 'Data.Int.Int'.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:nfAppIO nfAppIO>@.
+--
+-- @since 0.1.0.0
 nfAppIO :: NFData b => (a -> IO b) -> a -> Benchmarkable
 nfAppIO = fmap toBenchmarkable . ioFuncToBench rnf
 
@@ -321,21 +351,29 @@ nfAppIO = fmap toBenchmarkable . ioFuncToBench rnf
 -- Ideally @x@ should be a primitive data type like 'Data.Int.Int'.
 --
 -- Drop-in replacement for @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:whnfAppIO whnfAppIO>@.
+--
+-- @since 0.1.0.0
 whnfAppIO :: (a -> IO b) -> a -> Benchmarkable
 whnfAppIO = fmap toBenchmarkable . ioFuncToBench id
 
 -- | Run a benchmark interactively, providing an interface compatible with
 -- @Criterion.<https://hackage.haskell.org/package/criterion/docs/Criterion.html#v:benchmark benchmark>@.
+--
+-- @since 0.1.0.0
 benchmark :: Benchmarkable -> IO ()
 benchmark = void . flip runBenchmark defaultMEnv . bench "..."
 
 -- | Run benchmarks and report results, providing an interface
 -- compatible with @Criterion.Main.<https://hackage.haskell.org/package/criterion/docs/Criterion-Main.html#v:defaultMain defaultMain>@.
+--
+-- @since 0.1.0.0
 defaultMain :: [Benchmark] -> IO ()
 defaultMain = defaultMainWith defaultConfig
 
 -- | An entry point that can be used as a @main@ function, with
 -- configurable defaults.
+--
+-- @since 0.1.2.1
 defaultMainWith :: Config -> [Benchmark] -> IO ()
 defaultMainWith cfg bs = do
   let act = defaultMainWith' cfg bs
@@ -350,6 +388,8 @@ defaultMainWith cfg bs = do
 {-# INLINABLE defaultMainWith #-}
 
 -- | Default configuration used for running benchmarks.
+--
+-- @since 0.1.2.1
 defaultConfig :: Config
 defaultConfig = Config
   { cfgUseColor = Auto
@@ -381,6 +421,8 @@ defaultConfig = Config
 -- but the implementation is different.
 
 -- | Data type to hold configuration information.
+--
+-- @since 0.1.2.1
 data Config = Config
   { cfgUseColor     :: !UseColor
     -- ^ When to use colored outputs.
@@ -412,12 +454,16 @@ data Config = Config
   }
 
 -- | When to use colored output.
+--
+-- @since 0.1.2.1
 data UseColor
   = Always -- ^ Always use color.
   | Auto   -- ^ Use color if the output is a terminal device.
   | Never  -- ^ Don't use color.
 
 -- | Data type to express how to match benchmark names.
+--
+-- @since 0.1.2.1
 data MatchMode
   = Pattern  -- ^ Substring match.
   | Prefix   -- ^ Prefix match.
@@ -425,6 +471,8 @@ data MatchMode
   | Glob     -- ^ Glob pattern match.
 
 -- | Express duration for timeout.
+--
+-- @since 0.1.2.1
 data Timeout
   = Timeout !Double
   -- ^ Duration in seconds.
