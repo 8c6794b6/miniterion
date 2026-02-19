@@ -42,7 +42,7 @@ jobs:
 
       - name: Cache cabal package database
         id: home-dot-cabal
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.get-home.outputs.home }}/.cabal
           key: cabal-${{ matrix.plan.ghc }}-${{ inputs.cache }}
