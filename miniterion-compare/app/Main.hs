@@ -142,6 +142,15 @@ fib4 = go 0 1
       | i == 0 = toInteger a
       | otherwise = go b (a+b) (i-1)
 
+ifib :: Int -> Int
+ifib n = if n < 2 then n else ifib (n-1) + ifib (n-2)
+
+ifibBench :: [Benchmark]
+ifibBench =
+  [ bgroup "ifib"
+    [bench (show n) (nf ifib n) | n <- [4,8,16,32]]
+  ]
+
 b04 :: [Benchmark]
 b04 =
   let f n = bench ("succ " ++ show n) (nf succi n)
@@ -213,6 +222,7 @@ main =
     (concat [ b01
             -- , b02
             , fibBench
+            , ifibBench
             -- , fib2Bench
             -- , fib3Bench
             -- , fib4Bench
