@@ -6,7 +6,7 @@
 [![Stackage LTS][stackage-lts-badge]][stackage-lts-package]
 [![Stackage nightly][stackage-nightly-badge]][stackage-nightly-package]
 
-<!-- <a href="https://raw.githubusercontent.com/8c6794b6/miniterion/refs/heads/main/www/fibo.html" target="_blank"><img src="https://raw.githubusercontent.com/8c6794b6/miniterion/refs/heads/main/www/fibo.png"></a> -->
+<a href="https://raw.githubusercontent.com/8c6794b6/miniterion/refs/heads/main/www/fibo.html" target="_blank"><img src="https://raw.githubusercontent.com/8c6794b6/miniterion/refs/heads/main/www/fibo.png"></a>
 
 ## Summary
 
