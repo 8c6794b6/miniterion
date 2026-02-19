@@ -48,7 +48,7 @@ data-files:
 common basic
     build-depends:    base >= 4.12 && < 5.0
     default-language: Haskell2010
-    ghc-options:      -Wall
+    ghc-options:      -O2 -Wall -Wcompat -Widentities
 
 flag dev
     description:      Flag for internal development
