@@ -5,21 +5,18 @@
 * Show time from OLS linear regression, R², and range values in
   benchmark results.
 
-* Modify CSV format to follow the template used in Criterion.
+* Show ``variance introduced by outliers ...`` message.
 
-* Discard measurement results when the total duration is shorter than
-  threshold.
+* Show outlier counts with ``-v2`` option.
+
+* Modify CSV format to follow the template used in Criterion.
 
 * Modify timeout detection to refer to the benchmark start and end
   time instead of the sum of the measurement durations.
 
-* Support brace expressions in glob.
+* Modify glob pattern match to support brace expressions.
 
 * Modify the output of ``-v3`` option to show divided time.
-
-* Show ``variance introduced by outliers ...`` message.
-
-* Show outlier counts with ``-v2`` option.
 
 * Modify ``--verbosity`` option to recognize verbosity level 3.
 
@@ -34,10 +31,10 @@
 * Remove `--time-mode` option, always keep track of wall time and cpu
   time in JSON data.
 
-* Silence the outputs in tests.
-
 * Export ``defaultMainWith``, ``defaultConfig``, ``Config`` and the
   data types used in the fields of ``Config``.
+
+* Silence the outputs in tests.
 
 ## 0.1.1.1 -- 2024-05-29
 
