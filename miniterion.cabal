@@ -86,6 +86,7 @@ benchmark fibo
     main-is:          Main.hs
     build-depends:    base
                     , miniterion
+    ghc-options:      -fproc-alignment=64
 
 source-repository head
   type:     git
