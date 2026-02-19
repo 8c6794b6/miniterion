@@ -1061,7 +1061,7 @@ isUnicodeSupported = do
   let utf_prefix = take 3 (textEncodingName enc) == "UTF"
 #if defined(mingw32_HOST_OS)
   is_65001 <- fmap (== 65001) getConsoleOutputCP
-  pure utf_prefix && is_65001
+  pure (utf_prefix && is_65001)
 #else
   pure utf_prefix
 #endif
