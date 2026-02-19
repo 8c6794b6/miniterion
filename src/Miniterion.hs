@@ -419,15 +419,15 @@ data UseColor
 
 -- | Data type to express how to match benchmark names.
 data MatchMode
-  = Pattern  -- ^ Substring match
-  | Prefix   -- ^ Prefix match
-  | IPattern -- ^ Case insensitive prefix match
-  | Glob     -- ^ Glob pattern match
+  = Pattern  -- ^ Substring match.
+  | Prefix   -- ^ Prefix match.
+  | IPattern -- ^ Case insensitive prefix match.
+  | Glob     -- ^ Glob pattern match.
 
 -- | Express duration for timeout.
 data Timeout
-  = Timeout !Word64
-  -- ^ Duration in picoseconds (e.g., @truncate 2e12@ for 2 seconds).
+  = Timeout !Double
+  -- ^ Duration in seconds.
   | NoTimeout
   -- ^ Run without timeout.
 
@@ -518,6 +518,9 @@ data MEnv = MEnv
     -- ^ 'True' if unicode is supported.
   , meHasRTSStats     :: !Bool
     -- ^ 'True' if GC statistics are available.
+  , meTimeout         :: !(Maybe Word64)
+    -- ^ 'Just' timeout duration in picoseconds, or 'Nothing' if
+    -- running benchmarks without timeout.
   }
 
 -- | The default environment.
@@ -531,6 +534,7 @@ defaultMEnv = MEnv
   , meUseColor = False
   , meSupportsUnicode = False
   , meHasRTSStats = False
+  , meTimeout = Nothing
   }
 {-# INLINABLE defaultMEnv #-}
 
@@ -548,6 +552,9 @@ getDefaultMEnv !cfg = do
     , meUseColor = use_color
     , meSupportsUnicode = supports_unicode
     , meHasRTSStats = has_rts_stats
+    , meTimeout = case cfgTimeout cfg of
+        Timeout secs -> Just (truncate (secs * 1e12))
+        NoTimeout    -> Nothing
     }
 {-# INLINABLE getDefaultMEnv #-}
 
@@ -661,7 +668,7 @@ runBenchmarkable idx fullname b = do
   putBenchname fullname
   debug "\n"
   liftIO $ hFlush stdout
-  mb_sum <- withTimeout cfgTimeout (liftIO $ measureUntil menv b)
+  mb_sum <- withTimeout meTimeout (liftIO $ measureUntil menv b)
   let (result, summary) = case mb_sum of
         Nothing -> (TimedOut fullname, emptySummary)
         Just s  -> (compareVsBaseline meBaseline cfg fullname s, s)
@@ -674,10 +681,10 @@ runBenchmarkable idx fullname b = do
 iterBenchmarkable :: Word64 -> Int -> String -> Benchmarkable
                   -> Miniterion Result
 iterBenchmarkable n _idx fullname b = do
-  MEnv{meConfig=Config{..}} <- getMEnv
+  MEnv{..} <- getMEnv
   putBenchname fullname
   liftIO $ hFlush stdout
-  mb_unit <- withTimeout cfgTimeout (liftIO $ runLoop b n id)
+  mb_unit <- withTimeout meTimeout (liftIO $ runLoop b n id)
   case mb_unit of
     Just () -> info "\n" >> pure Done
     _ -> do
@@ -689,10 +696,10 @@ putBenchname :: String -> Miniterion ()
 putBenchname name = info (white "benchmarking " <> boldCyan (fromString name))
 {-# INLINE putBenchname #-}
 
-withTimeout :: Timeout -> Miniterion a -> Miniterion (Maybe a)
+withTimeout :: Maybe Word64 -> Miniterion a -> Miniterion (Maybe a)
 withTimeout tout m@(Miniterion r) = case tout of
-  Timeout pico -> Miniterion (timeout (picoToMicroSecWI pico) . r)
-  NoTimeout    -> fmap Just m
+  Just pico -> Miniterion (timeout (picoToMicroSecWI pico) . r)
+  Nothing   -> fmap Just m
 
 benchNames :: [String] -> Benchmark -> [String]
 benchNames = go
@@ -1405,7 +1412,7 @@ options =
 
   , Option ['L'] ["time-limit"]
     (ReqArg (\str (O c m) -> case readMaybe str :: Maybe Double of
-                Just n -> O (c {cfgTimeout = Timeout (truncate (1e12 * n))}) m
+                Just n -> O (c {cfgTimeout = Timeout n}) m
                 _      -> throw (InvalidArgument "time-limit" str))
      "SECS")
     "Time limit to run a benchmark\n(default: no timeout)"
@@ -1729,7 +1736,7 @@ measure MEnv{meHasRTSStats=gc} num b =
     pure $ Measured meas end_time
 
 measureUntil :: MEnv -> Benchmarkable -> IO Summary
-measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
+measureUntil menv@MEnv{meConfig=cfg@Config{..}, ..} b
   | is_once   = fmap (measToSummary . mdMeas) (measure menv 1 b)
   | otherwise = init_and_go
   where
@@ -1752,16 +1759,16 @@ measureUntil menv@MEnv{meConfig=cfg@Config{..}} b
               ts = [ word64ToDouble measTime / word64ToDouble measIters
                    | Measurement{..} <- acMeasurements acc' ]
           !is_stddev_in_target_range = sd < cfgRelStdDev * mean
-          !is_timeout_soon = case cfgTimeout of
-            Timeout dur -> dur < (end_time + measTime m * 2) - start_time
-            _           -> False
+          !is_timeout_soon = case meTimeout of
+            Just dur -> dur < (end_time + measTime m * 2) - start_time
+            _        -> False
           !acc' = acc { acMeasurements = m : acMeasurements acc
                       , acCount = acCount acc + 1
                       , acValidCount = acValidCount acc +
                                        if threshold < measTime m then 1 else 0
                       }
       debug' menv (formatMeasurement m mean sd)
-      warnOnTooLongBenchmark cfgTimeout start_time end_time
+      warnOnTooLongBenchmark meTimeout start_time end_time
       -- Need at least 4 long enough measurements to get IQR while
       -- computing KDE.
       if 4 <= acValidCount acc' &&
@@ -1798,15 +1805,15 @@ measToSummary m@(Measurement {measTime=t}) =
           }
 {-# INLINABLE measToSummary #-}
 
-warnOnTooLongBenchmark :: Timeout -> Word64 -> Word64 -> IO ()
+warnOnTooLongBenchmark :: Maybe Word64 -> Word64 -> Word64 -> IO ()
 warnOnTooLongBenchmark tout t_start t_now =
   case tout of
-    NoTimeout | t_now - t_start > 100 * 1000000000000 ->
+    Nothing | t_now - t_start > 100 * 1000000000000 ->
       hPutStrLn stderr $
-                "\n" ++
-                "This benchmark takes more than 100 seconds.\n" ++
-                "Conosider setting --time-limit, if this is\n" ++
-                "unexpected (or to silence this warning)."
+              "\n" ++
+              "This benchmark takes more than 100 seconds.\n" ++
+              "Conosider setting --time-limit, if this is\n" ++
+              "unexpected (or to silence this warning)."
     _ -> pure ()
 {-# INLINABLE warnOnTooLongBenchmark #-}
 
