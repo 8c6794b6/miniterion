@@ -396,8 +396,9 @@ csv = with_csv_cleanup $ testGroup "csv"
   , testCase "non-existing baseline" $
     shouldExitFailure $ benchFastfib ["--baseline", "nosuch.csv"]
 
-  , testCase writing_quoted_csv $
+  , testCase writing_quoted_csv $ do
       benchQuotes ["--csv", "quotes.csv", "-L3"]
+      benchNames ["--csv", "quotes.csv"]
 
   , after_quoted_csv $
     testCase "reading baseline containing quotes" $
@@ -716,4 +717,5 @@ benchNames args =
     , bench "containing\nnew\nlines" (nf fromEnum 'c')
     , bench "containing lt, gt, amp <>&" (nf fromEnum 'd')
     , bench "containing \\\\ back slashes \\\\" (nf fromEnum 'e')]
+    , bench "containing unbalanced \" double quote" (nf fromEnum 'f')
   ]
