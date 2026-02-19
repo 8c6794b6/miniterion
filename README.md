@@ -6,6 +6,7 @@
 [![Stackage LTS][stackage-lts-badge]][stackage-lts-package]
 [![Stackage nightly][stackage-nightly-badge]][stackage-nightly-package]
 
+<!-- <a href="https://raw.githubusercontent.com/8c6794b6/miniterion/refs/heads/main/www/fibo.html" target="_blank"><img src="https://raw.githubusercontent.com/8c6794b6/miniterion/refs/heads/main/www/fibo.png"></a> -->
 
 ## Summary
 
@@ -84,37 +85,37 @@ then compile and run the benchmark with `cabal bench`:
 
 ```console
 $ cabal bench
-Build profile: -w ghc-9.12.2 -O1
+Build profile: -w ghc-9.14.1 -O1
 In order, the following will be built (use -v for more details):
- - miniterion-0.1.2.0 (bench:fibo) (first run)
-Preprocessing benchmark 'fibo' for miniterion-0.1.2.0...
-Building benchmark 'fibo' for miniterion-0.1.2.0...
+ - miniterion-0.1.2.1 (bench:fibo) (ephemeral targets)
+Preprocessing benchmark 'fibo' for miniterion-0.1.2.1...
+Building benchmark 'fibo' for miniterion-0.1.2.1...
 Running 1 benchmarks...
 Benchmark fibo: RUNNING...
 benchmarking fib/1
-time                 4.954 ns   (4.953 ns .. 4.954 ns)
-                     1.000 R²   (1.000 R² .. 1.000 R²)
-mean                 4.957 ns   (4.947 ns .. 4.961 ns)
-std dev              12.00 ps   (12.00 ps .. 944.2 μs)
+time                 3.453 ns   (3.426 ns .. 3.498 ns)
+                     0.998 R²   (0.995 R² .. 1.000 R²)
+mean                 3.434 ns   (3.423 ns .. 3.451 ns)
+std dev              16.55 ps   (2.983 ps .. 20.13 ps)
 
 benchmarking fib/5
-time                 39.93 ns   (39.88 ns .. 39.98 ns)
+time                 40.67 ns   (40.60 ns .. 40.75 ns)
                      1.000 R²   (1.000 R² .. 1.000 R²)
-mean                 39.93 ns   (39.73 ns .. 40.62 ns)
-std dev              780.0 ps   (780.0 ps .. 943.8 μs)
+mean                 40.78 ns   (40.68 ns .. 40.88 ns)
+std dev              112.4 ps   (7.561 ps .. 121.8 ps)
 
 benchmarking fib/9
-time                 325.6 ns   (325.5 ns .. 325.6 ns)
+time                 336.4 ns   (335.6 ns .. 337.7 ns)
                      1.000 R²   (1.000 R² .. 1.000 R²)
-mean                 324.9 ns   (324.7 ns .. 325.1 ns)
-std dev              370.0 ps   (370.0 ps .. 944.1 μs)
+mean                 335.7 ns   (335.5 ns .. 335.8 ns)
+std dev              155.5 ps   (4.366 ps .. 187.1 ps)
 
 benchmarking fib/11
-time                 852.6 ns   (852.3 ns .. 852.9 ns)
+time                 900.6 ns   (899.5 ns .. 902.0 ns)
                      1.000 R²   (1.000 R² .. 1.000 R²)
-mean                 854.2 ns   (852.1 ns .. 856.3 ns)
-std dev              4.072 ns   (4.072 ns .. 944.6 μs)
-
+mean                 899.7 ns   (899.0 ns .. 900.2 ns)
+std dev              759.3 ps   (67.06 ps .. 955.3 ps)
+variance introduced by outliers: 64% (severely inflated)
 
 Benchmark fibo: FINISH
 ```
