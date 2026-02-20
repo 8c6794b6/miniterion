@@ -1,6 +1,6 @@
 # Revision history for miniterion
 
-## Unreleased
+## 0.1.2.1 -- 2026-02-20
 
 * Show time from OLS linear regression, R², and range values in
   benchmark results.
